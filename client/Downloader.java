@@ -1,3 +1,3 @@
 public class Downloader {
-    // This class will handle the downloaded files
+    // This class will handle the download process for the client
 }

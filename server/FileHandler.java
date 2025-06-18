@@ -6,6 +6,7 @@ import java.io.*;
 public class FileHandler {
     private static final String STORAGE_DIR = "server_storage";
 
+    // This handler will manage file uploads for the server side
     public static class UploadHandler implements HttpHandler {
 
         @Override
@@ -15,6 +16,7 @@ public class FileHandler {
         }
     }
 
+    // This handler will manage file downloads for the server side
     public static class DownloadHandler implements HttpHandler {
 
         @Override
