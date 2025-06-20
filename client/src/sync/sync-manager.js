@@ -237,6 +237,31 @@ class SyncManager {
         }
     }
 
+    pauseSync() {
+        if (this.syncIntervalId) {
+            clearInterval(this.syncIntervalId);
+            this.syncIntervalId = null;
+            this.isPaused = true;
+            console.log('Periodic sync paused'.yellow);
+            return true;
+        } else {
+            console.log('Sync is not currently running'.yellow);
+            return false;
+        }
+    }
+
+    resumeSync() {
+        if (this.isPaused || !this.syncIntervalId) {
+            this.startPeriodicSync();
+            this.isPaused = false;
+            console.log('Periodic sync resumed'.green);
+            return true;
+        } else {
+            console.log('Sync is already running'.yellow);
+            return false;
+        }
+    }
+
     async compareAndSync(localFiles, serverFiles, verbose = true) {
         const serverFileMap = new Map();
         serverFiles.forEach(file => serverFileMap.set(file.name || file.fileName, file));
