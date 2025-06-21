@@ -107,6 +107,7 @@ sync>
 | `config` | Show current configuration | `config` |
 | `help` | Show available commands | `help` |
 | `quit` | Exit the application | `quit` |
+| `download` | Download File | `download-version <filename> <version>` |
 
 ## 🔄 How It Works
 
