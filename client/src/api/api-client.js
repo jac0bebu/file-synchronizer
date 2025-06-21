@@ -81,6 +81,21 @@ class ApiClient {
         }
     }
 
+    async downloadFileVersion(fileName, version, destinationPath) {
+        try {
+            const response = await axios.get(
+                `${this.serverUrl}/files/${encodeURIComponent(fileName)}/versions/${encodeURIComponent(version)}/download`,
+                { responseType: 'arraybuffer' }
+            );
+            await fs.ensureDir(path.dirname(destinationPath));
+            await fs.writeFile(destinationPath, response.data);
+            return { success: true, fileName, version, path: destinationPath };
+        } catch (error) {
+            console.error(`Failed to download ${fileName} version ${version}:`, error.message);
+            throw error;
+        }
+    }
+
     async deleteFile(fileName) {
         try {
             const response = await axios.delete(`${this.serverUrl}/files/${fileName}`);

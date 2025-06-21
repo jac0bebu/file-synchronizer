@@ -204,47 +204,16 @@ class CliInterface {
             console.log('Usage: download-version <filename> <version>'.red);
             return;
         }
-        
         const [fileName, version] = args;
-        
+        const path = require('path');
+        const destinationPath = path.join(process.cwd(), 'downloads', `${fileName}.v${version}`);
+
         try {
             console.log(`Downloading ${fileName} version ${version}...`.yellow);
-            
-            // Check if the API method exists
-            if (typeof this.syncManager.api.downloadSpecificVersion === 'function') {
-                await this.syncManager.api.downloadSpecificVersion(fileName, version);
-                console.log(`✅ Downloaded ${fileName} version ${version}`.green);
-            } else {
-                console.log('❌ Version download not yet fully implemented.'.yellow);
-                console.log('This feature requires additional API implementation.'.gray);
-            }
-            
+            await this.syncManager.api.downloadFileVersion(fileName, version, destinationPath);
+            console.log(`✅ Downloaded ${fileName} version ${version} to ${destinationPath}`.green);
         } catch (error) {
             console.error(`❌ Error downloading version:`.red, error.message);
-        }
-    }
-
-    async downloadSpecificVersion(fileName, version) {
-        try {
-            const response = await axios.get(`${this.serverUrl}/files/${fileName}/versions/${version}/download`, {
-                responseType: 'arraybuffer'
-            });
-            
-            return response.data;
-        } catch (error) {
-            console.error(`Failed to download ${fileName} version ${version}:`, error.message);
-            throw error;
-        }
-    }
-
-    // Also add method to get file versions
-    async getFileVersions(fileName) {
-        try {
-            const response = await axios.get(`${this.serverUrl}/files/${fileName}/versions`);
-            return response.data;
-        } catch (error) {
-            console.error(`Failed to get versions for ${fileName}:`, error.message);
-            throw error;
         }
     }
 
