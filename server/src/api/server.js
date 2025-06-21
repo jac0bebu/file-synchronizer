@@ -354,15 +354,19 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
     }
 });
 
+// Check your server.js file for the delete endpoint
 app.delete('/files/:fileName', async (req, res) => {
     try {
         const fileName = decodeURIComponent(req.params.fileName);
         console.log(`DELETE request for file: ${fileName}`);
         
-        // Delete from file storage
+        // Delete from storage
         const deleted = await fileStorage.deleteFile(fileName);
         
         if (deleted) {
+            // Force a brief delay to ensure file is completely removed
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
             console.log(`Successfully deleted ${fileName} from server`);
             res.json({ success: true, message: `File ${fileName} deleted successfully` });
         } else {
