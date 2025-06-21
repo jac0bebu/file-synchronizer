@@ -23,7 +23,12 @@ class SyncApplication {
         this.fileWatcher = new FileWatcher(this.syncFolder, {
             onChange: this.handleFileChange.bind(this)
         });
+
+        // *** ADD THIS LINE ***
+        this.syncManager.fileWatcher = this.fileWatcher;
+
         this.ui = new CliInterface(this.syncManager);
+        
     }
     
     async start() {
@@ -56,8 +61,14 @@ class SyncApplication {
         }
     }
     
-    handleFileChange(fileEvent) {
-        this.syncManager.handleFileChange(fileEvent).catch(error => {
+    handleFileChange(filePath, eventType) {
+        const fileName = path.basename(filePath);
+        
+        this.syncManager.handleFileChange({
+            type: eventType,
+            path: filePath,
+            fileName: fileName
+        }).catch(error => {
             console.error('Error in file change handler:'.red, error.message);
         });
     }

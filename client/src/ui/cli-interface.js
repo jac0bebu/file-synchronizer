@@ -154,16 +154,32 @@ class CliInterface {
         
         try {
             console.log(`Deleting file: ${fileName}...`.yellow);
-            const result = await this.syncManager.api.deleteFile(fileName);
-            console.log(`✅ File ${fileName} deleted successfully`.green);
             
-            this.syncManager.updateSyncStatus(fileName, 'deleted');
-            await this.syncManager.performFullSync();
+            // 1. Delete from server FIRST
+            try {
+                await this.syncManager.api.deleteFile(fileName);
+                console.log(`✅ File ${fileName} deleted from server`.green);
+                this.syncManager.markAsDeleted(fileName);
+            } catch (error) {
+                console.log(`File ${fileName} not found on server or already deleted`.yellow);
+            }
+            
+            // 2. Delete local file
+            const fs = require('fs-extra');
+            const path = require('path');
+            const localPath = path.join(this.syncManager.syncFolder, fileName);
+            
+            if (await fs.pathExists(localPath)) {
+                await fs.remove(localPath);
+                console.log(`✅ File ${fileName} deleted locally`.green);
+            }
+            
+            console.log(`🗑️ File ${fileName} deleted successfully`.green.bold);
+            
         } catch (error) {
             console.error(`Error deleting ${fileName}:`.red, error.message);
         }
     }
-
     async showVersions(args) {
         if (!args || args.length === 0) {
             console.log('Usage: versions <filename>'.red);

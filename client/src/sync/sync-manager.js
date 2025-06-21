@@ -13,6 +13,8 @@ class SyncManager {
         this.pendingUploads = new Map();
         this.pendingDownloads = new Map();
         this.fileSyncStatus = new Map();
+        this.recentlyDeleted = new Set();
+        this.pendingDeletions = new Set(); // Track files marked for server deletion
         
         console.log('Sync Manager initialized'.green);
         console.log(`Client ID: ${this.clientId}`.cyan);
@@ -44,6 +46,22 @@ class SyncManager {
         }
     }
 
+    // Add method to mark file for deletion on server
+    markForDeletion(fileName) {
+        this.pendingDeletions.add(fileName);
+        console.log(`Marked ${fileName} for server deletion`.gray);
+    }
+
+    // Add method to mark file as recently deleted
+    markAsDeleted(fileName) {
+        this.recentlyDeleted.add(fileName);
+        this.pendingDeletions.delete(fileName); // Remove from pending
+        // Remove from tracking after 30 seconds
+        setTimeout(() => {
+            this.recentlyDeleted.delete(fileName);
+        }, 30000);
+    }
+
     async handleFileChange(fileEvent) {
         const { type, path: filePath, fileName } = fileEvent;
         
@@ -51,8 +69,9 @@ class SyncManager {
             this.updateSyncStatus(fileName, 'processing');
             
             if (type === 'unlink') {
-                // Handle file deletion - not implemented yet
+                // Handle file deletion - mark for server deletion
                 console.log(`File deleted locally: ${fileName}`.red);
+                this.markForDeletion(fileName);
                 this.updateSyncStatus(fileName, 'deleted');
                 return;
             }
@@ -134,33 +153,46 @@ class SyncManager {
     }
 
     async downloadFile(serverFile) {
-        const localPath = path.join(this.syncFolder, serverFile.name);
-        this.updateSyncStatus(serverFile.name, 'downloading');
-        
         try {
-            if (this.pendingDownloads.has(serverFile.name)) {
-                return;
+            const fileName = serverFile.name || serverFile.fileName;
+            const localPath = path.join(this.syncFolder, fileName);
+            
+            // CRITICAL: Ignore this file during download to prevent loop
+            if (this.fileWatcher) {
+                this.fileWatcher.ignoreFile(fileName);
             }
             
-            this.pendingDownloads.set(serverFile.name, true);
+            this.updateSyncStatus(fileName, 'downloading');
+            console.log(`Downloading ${fileName}`.blue);
             
-            console.log(`Downloading ${serverFile.name}`.cyan);
+            const result = await this.api.downloadFile(fileName, localPath);
             
-            const result = await this.api.downloadFile(serverFile.name, localPath);
+            if (result.success) {
+                // Set file timestamp to match server timestamp
+                const serverTime = new Date(serverFile.lastModified);
+                await fs.utimes(localPath, serverTime, serverTime);
+                
+                console.log(`Successfully downloaded ${fileName}`.green);
+                this.updateSyncStatus(fileName, 'synced');
+            }
             
-            console.log(`Successfully downloaded ${serverFile.name}`.green);
-            this.updateSyncStatus(serverFile.name, 'synced', {
-                lastSync: new Date().toISOString()
-            });
+            // Wait a bit before resuming file watching for this file
+            setTimeout(() => {
+                if (this.fileWatcher) {
+                    this.fileWatcher.unignoreFile(fileName);
+                }
+            }, 2000); // 2 second delay
             
             return result;
-            
         } catch (error) {
-            console.error(`Download failed for ${serverFile.name}:`.red, error.message);
-            this.updateSyncStatus(serverFile.name, 'error', error.message);
+            console.error(`Failed to download ${fileName}:`.red, error.message);
+            this.updateSyncStatus(fileName, 'error', error.message);
+            
+            // Resume file watching even on error
+            if (this.fileWatcher) {
+                this.fileWatcher.unignoreFile(fileName);
+            }
             throw error;
-        } finally {
-            this.pendingDownloads.delete(serverFile.name);
         }
     }
 
@@ -201,8 +233,6 @@ class SyncManager {
             if (updatesFound > 0) {
                 console.log(`Sync completed: ${updatesFound} updates processed`.green);
             }
-            // Remove this line that logs every time:
-            // console.log(`Sync completed: ${serverFiles.length} server files, ${localFiles.length} local files`.gray);
             
         } catch (error) {
             // Only log errors
@@ -271,20 +301,46 @@ class SyncManager {
         
         let updatesFound = 0;
         
-        // Files to download (on server but not local)
+        // 1. Handle pending deletions FIRST
+        for (const fileName of this.pendingDeletions) {
+            if (serverFileMap.has(fileName)) {
+                if (verbose) console.log(`Deleting ${fileName} from server`.red);
+                
+                try {
+                    await this.api.deleteFile(fileName);
+                    console.log(`✅ File ${fileName} deleted from server`.green);
+                    this.markAsDeleted(fileName);
+                    updatesFound++;
+                } catch (error) {
+                    console.error(`Failed to delete ${fileName} from server:`.red, error.message);
+                }
+            } else {
+                this.markAsDeleted(fileName);
+            }
+        }
+        
+        // 2. Files to download (on server but not local)
         for (const serverFile of serverFiles) {
             const fileName = serverFile.name || serverFile.fileName;
+            
+            if (this.recentlyDeleted.has(fileName)) {
+                if (verbose) console.log(`Skipping recently deleted file: ${fileName}`.gray);
+                continue;
+            }
+            
             if (!localFileMap.has(fileName)) {
                 if (verbose) console.log(`New server file: ${fileName}`.blue);
                 await this.downloadFile(serverFile);
                 updatesFound++;
             } else {
-                // File exists in both places, compare timestamps
                 const localFile = localFileMap.get(fileName);
                 const serverTime = new Date(serverFile.lastModified || 0);
                 const localTime = new Date(localFile.lastModified);
                 
-                if (serverTime > localTime) {
+                const timeDifferenceMs = Math.abs(serverTime.getTime() - localTime.getTime());
+                const tolerance = 2000;
+                
+                if (timeDifferenceMs > tolerance && serverTime > localTime) {
                     if (verbose) console.log(`Server has newer version of ${fileName}`.blue);
                     await this.downloadFile(serverFile);
                     updatesFound++;
@@ -292,7 +348,43 @@ class SyncManager {
             }
         }
         
-        return updatesFound; // Return actual number of changes made
+        // 3. Handle local files not on server (SINGLE LOOP - no duplication)
+        for (const localFile of localFiles) {
+            if (!serverFileMap.has(localFile.name) && 
+                !this.recentlyDeleted.has(localFile.name) && 
+                !this.pendingDeletions.has(localFile.name)) {
+                
+                // Decide: Upload or Delete based on file age
+                const fileAge = Date.now() - new Date(localFile.lastModified).getTime();
+                const isNewFile = fileAge < 60000; // Less than 1 minute = new file
+                
+                if (isNewFile) {
+                    // NEW FILE: Upload it
+                    if (verbose) console.log(`New local file to upload: ${localFile.name}`.green);
+                    
+                    try {
+                        await this.uploadFile(localFile.path);
+                        updatesFound++;
+                    } catch (error) {
+                        console.error(`Failed to upload ${localFile.name}:`.red, error.message);
+                    }
+                } else {
+                    // OLD FILE: Delete it (was deleted from server by another client)
+                    if (verbose) console.log(`File deleted from server by another client: ${localFile.name}`.red);
+                    
+                    try {
+                        await fs.remove(localFile.path);
+                        console.log(`🗑️ Removed local file: ${localFile.name}`.yellow);
+                        this.updateSyncStatus(localFile.name, 'deleted');
+                        updatesFound++;
+                    } catch (error) {
+                        console.error(`Failed to remove local file ${localFile.name}:`.red, error.message);
+                    }
+                }
+            }
+        }
+        
+        return updatesFound;
     }
 
     updateSyncStatus(fileName, status, details = {}) {
@@ -325,13 +417,11 @@ class SyncManager {
         }
         
         this.syncIntervalId = setInterval(async () => {
-            // Only log start of sync if verbose flag is on
             if (this.verbose) {
                 console.log('Running periodic sync...'.gray);
             }
             
             try {
-                // Perform sync without verbose output
                 await this.performSyncQuietly();
             } catch (error) {
                 console.error('Periodic sync failed:'.red, error.message);
@@ -340,6 +430,7 @@ class SyncManager {
         
         console.log(`Periodic sync started (every ${this.pollInterval/1000} seconds)`.cyan);
     }
+    
     stop() {
         if (this.syncIntervalId) {
             clearInterval(this.syncIntervalId);

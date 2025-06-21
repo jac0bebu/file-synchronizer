@@ -356,27 +356,21 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
 
 app.delete('/files/:fileName', async (req, res) => {
     try {
-        const { fileName } = req.params;
+        const fileName = decodeURIComponent(req.params.fileName);
+        console.log(`DELETE request for file: ${fileName}`);
         
-        // Check if file exists
-        const exists = await fileStorage.fileExists(fileName);
-        if (!exists) {
-            return res.status(404).json({ error: 'File not found' });
+        // Delete from file storage
+        const deleted = await fileStorage.deleteFile(fileName);
+        
+        if (deleted) {
+            console.log(`Successfully deleted ${fileName} from server`);
+            res.json({ success: true, message: `File ${fileName} deleted successfully` });
+        } else {
+            res.status(404).json({ success: false, message: 'File not found' });
         }
-        
-        // Delete the file
-        await fileStorage.deleteFile(fileName);
-        
-        // Also delete metadata
-        await metadataStorage.deleteMetadata(fileName);
-        
-        res.json({
-            success: true,
-            message: `File ${fileName} deleted successfully`
-        });
     } catch (error) {
-        console.error('Error deleting file:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Delete file error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 

@@ -9,8 +9,34 @@ class FileWatcher {
         this.debounceMs = options.debounceMs || 500;
         this.watcher = null;
         this.debounceTimers = {};
+        this.isIgnoring = false; // Add this flag
+        this.ignoredFiles = new Set(); // Track files being downloaded
         
         console.log(`File watcher initialized for folder: ${this.syncFolder}`.cyan);
+    }
+
+    // Add method to ignore specific files during downloads
+    ignoreFile(fileName) {
+        this.ignoredFiles.add(fileName);
+        console.log(`Ignoring file watcher events for: ${fileName}`.gray);
+    }
+
+    // Add method to stop ignoring files
+    unignoreFile(fileName) {
+        this.ignoredFiles.delete(fileName);
+        console.log(`Resuming file watcher events for: ${fileName}`.gray);
+    }
+
+    // Add method to pause all file watching
+    pause() {
+        this.isIgnoring = true;
+        console.log('File watcher paused'.yellow);
+    }
+
+    // Add method to resume file watching
+    resume() {
+        this.isIgnoring = false;
+        console.log('File watcher resumed'.yellow);
     }
 
     start() {
@@ -26,31 +52,45 @@ class FileWatcher {
             }
         });
 
-        this.watcher
-            .on('add', (filePath) => this.handleFileEvent('add', filePath))
-            .on('change', (filePath) => this.handleFileEvent('change', filePath))
-            .on('unlink', (filePath) => this.handleFileEvent('unlink', filePath));
-        
-        console.log('File watcher started'.green);
-        return this;
+        this.watcher.on('add', (filePath) => {
+            this.handleFileEvent(filePath, 'add');
+        });
+
+        this.watcher.on('change', (filePath) => {
+            this.handleFileEvent(filePath, 'change');
+        });
+
+        this.watcher.on('unlink', (filePath) => {
+            this.handleFileEvent(filePath, 'delete');
+        });
+
+        console.log('File watcher started successfully'.green);
     }
 
-    handleFileEvent(eventType, filePath) {
+    handleFileEvent(filePath, eventType) {
+        // Skip if file watching is paused
+        if (this.isIgnoring) {
+            console.log(`Ignoring ${eventType} event for ${path.basename(filePath)} (watcher paused)`.gray);
+            return;
+        }
+
         const fileName = path.basename(filePath);
-        const relativePath = path.relative(this.syncFolder, filePath);
         
-        // Debounce to prevent multiple events for the same file
-        clearTimeout(this.debounceTimers[filePath]);
+        // Skip if this specific file is being ignored
+        if (this.ignoredFiles.has(fileName)) {
+            console.log(`Ignoring ${eventType} event for ${fileName} (file being downloaded)`.gray);
+            return;
+        }
+
+        // Clear existing debounce timer
+        if (this.debounceTimers[filePath]) {
+            clearTimeout(this.debounceTimers[filePath]);
+        }
+
+        // Set new debounce timer
         this.debounceTimers[filePath] = setTimeout(() => {
-            console.log(`File event: ${eventType} - ${relativePath}`.blue);
-            
-            this.onChange({
-                type: eventType,
-                path: filePath,
-                fileName,
-                relativePath
-            });
-            
+            console.log(`File event: ${eventType} - ${fileName}`.cyan);
+            this.onChange(filePath, eventType);
             delete this.debounceTimers[filePath];
         }, this.debounceMs);
     }
@@ -58,14 +98,8 @@ class FileWatcher {
     stop() {
         if (this.watcher) {
             this.watcher.close();
-            console.log('File watcher stopped'.yellow);
+            console.log('File watcher stopped'.red);
         }
-        
-        // Clear all pending debounce timers
-        Object.keys(this.debounceTimers).forEach(key => {
-            clearTimeout(this.debounceTimers[key]);
-        });
-        this.debounceTimers = {};
     }
 }
 
