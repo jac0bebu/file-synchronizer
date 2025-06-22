@@ -378,6 +378,40 @@ app.delete('/files/:fileName', async (req, res) => {
     }
 });
 
+app.post('/files/:fileName/restore/:version', async (req, res) => {
+    try {
+        const { fileName, version } = req.params;
+        // Get the buffer for the specified version
+        const fileBuffer = await fileStorage.getFile(fileName, parseInt(version));
+        if (!fileBuffer) {
+            return res.status(404).json({ error: 'File version not found' });
+        }
+        // Get next version number
+        const nextVersion = await metadataStorage.getNextVersion(fileName);
+        // Save as new version
+        const saveResult = await fileStorage.saveFile(fileName, fileBuffer, nextVersion);
+        // Save new metadata
+        const restoredMeta = await metadataStorage.saveMetadata({
+            fileId: require('crypto').randomBytes(8).toString('hex'),
+            fileName,
+            version: nextVersion,
+            size: saveResult.size,
+            checksum: saveResult.checksum,
+            clientId: req.body?.clientId || 'restore',
+            lastModified: new Date().toISOString(),
+            restoredFrom: version
+        });
+        res.json({
+            success: true,
+            message: `Version ${version} restored as version ${nextVersion}`,
+            version: nextVersion,
+            metadata: restoredMeta
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(port, () => {
     console.log(`File Sync API running at http://localhost:${port}`);

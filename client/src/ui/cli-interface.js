@@ -9,7 +9,7 @@ class CliInterface {
             'status': this.showStatus.bind(this),
             'sync': this.startSync.bind(this),
             'list': this.listFiles.bind(this),
-            'delete': this.deleteFile.bind(this),  // Add this missing command
+            'delete': this.deleteFile.bind(this),
             'quit': this.quit.bind(this),
             'help': this.showHelp.bind(this),
             'conflicts': this.showConflicts.bind(this),
@@ -17,7 +17,8 @@ class CliInterface {
             'download-version': this.downloadVersion.bind(this),
             'pause': this.pauseSync.bind(this),
             'resume': this.resumeSync.bind(this),
-            'config': this.showConfig.bind(this)
+            'config': this.showConfig.bind(this),
+            'restore': this.restoreVersion.bind(this) 
         };
     }
 
@@ -296,12 +297,43 @@ class CliInterface {
         console.log('  delete'.cyan + ' <file>    - Delete a file');
         console.log('  versions'.cyan + ' <file>  - Show versions of a file');
         console.log('  download-version'.cyan + ' - Download specific version');
+        console.log('  restore'.cyan + ' <file> <version> - Restore a previous version as new');
         console.log('  conflicts'.cyan + '       - Show detected conflicts');
         console.log('  pause'.cyan + '           - Pause synchronization');
         console.log('  resume'.cyan + '          - Resume synchronization');
         console.log('  config'.cyan + '          - Show current configuration');
         console.log('  help'.cyan + '            - Show this help message');
         console.log('  quit'.cyan + '            - Exit the application\n');
+    }
+
+    async restoreVersion(args) {
+        if (!args || args.length < 2) {
+            console.log('Usage: restore <filename> <version>'.red);
+            return;
+        }
+        const [fileName, version] = args;
+        // Add confirmation prompt
+        this.rl.question(
+            `Are you sure you want to restore ${fileName} version ${version} as a new version? (yes/no): `.yellow,
+            async (answer) => {
+                if (answer.trim().toLowerCase() === 'yes' || answer.trim().toLowerCase() === 'y') {
+                    try {
+                        console.log(`Restoring ${fileName} version ${version} as new version...`.yellow);
+                        const result = await this.syncManager.api.restoreFileVersion(fileName, version, this.syncManager.clientId);
+                        if (result.success) {
+                            console.log(`✅ Restored ${fileName} version ${version} as version ${result.version}`.green);
+                        } else {
+                            console.log(`❌ Failed to restore: ${result.error || 'Unknown error'}`.red);
+                        }
+                    } catch (error) {
+                        console.error(`❌ Error restoring version:`.red, error.message);
+                    }
+                } else {
+                    console.log('Restore cancelled.'.gray);
+                }
+                this.rl.prompt();
+            }
+        );
     }
 
     quit() {

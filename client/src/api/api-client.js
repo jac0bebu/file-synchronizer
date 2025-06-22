@@ -143,6 +143,19 @@ class ApiClient {
             throw error;
         }
     }
+
+    async restoreFileVersion(fileName, version, clientId) {
+        try {
+            const response = await axios.post(
+                `${this.serverUrl}/files/${encodeURIComponent(fileName)}/restore/${encodeURIComponent(version)}`,
+                { clientId }
+            );
+            return response.data;
+        } catch (error) {
+            console.error(`Failed to restore ${fileName} version ${version}:`, error.message);
+            throw error;
+        }
+    }
 }
 
 module.exports = ApiClient;
