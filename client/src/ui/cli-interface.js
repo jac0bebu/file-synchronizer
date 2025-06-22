@@ -223,7 +223,11 @@ class CliInterface {
         }
         const [fileName, version] = args;
         const path = require('path');
-        const destinationPath = path.join(process.cwd(), 'downloads', `${fileName}.v${version}`);
+        const fs = require('fs-extra');
+        // Place downloads outside sync folder, grouped by clientId
+        const downloadsDir = path.join(process.cwd(), 'downloads', this.syncManager.clientId);
+        await fs.ensureDir(downloadsDir);
+        const destinationPath = path.join(downloadsDir, `${fileName}.v${version}`);
 
         try {
             console.log(`Downloading ${fileName} version ${version}...`.yellow);
