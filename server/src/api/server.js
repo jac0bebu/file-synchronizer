@@ -429,9 +429,9 @@ app.post('/files/:oldName/rename', async (req, res) => {
 });
 
 // Start server
-app.listen(port, () => {
-    console.log(`File Sync API running at http://localhost:${port}`);
-    console.log(`Health check: http://localhost:${port}/health`);
+app.listen(port, '0.0.0.0', () => {
+    console.log(`File Sync API running at http://192.168.1.105:${port}`);
+    console.log(`Health check: http://192.168.1.105:${port}/health`);
 });
 
 module.exports = app;

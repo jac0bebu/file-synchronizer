@@ -179,23 +179,30 @@ if (require.main === module) {
             console.error('Username is required!');
             process.exit(1);
         }
-        const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-        const clientId = `client-${safeUsername}`;
-        // Create sync folder inside client/sync-folder/
-        const syncFolder = path.resolve(__dirname, `../sync-folder/sync-folder-${safeUsername}`);
-        const downloadFolder = path.resolve(__dirname, `../downloads/${safeUsername}`);
+        rl.question('Enter the server IP address (e.g., 192.168.1.105): ', (ip) => {
+            if (!ip || !ip.trim()) {
+                console.error('Server IP address is required!');
+                process.exit(1);
+            }
+            const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+            const clientId = `client-${safeUsername}`;
+            const syncFolder = path.resolve(__dirname, `../sync-folder/sync-folder-${safeUsername}`);
+            const downloadFolder = path.resolve(__dirname, `../downloads/${safeUsername}`);
+            const serverUrl = `http://${ip.trim()}:3000`;
 
-        const app = new SyncApplication({
-            clientId,
-            syncFolder,
-            downloadFolder,
-            username: safeUsername
+            const app = new SyncApplication({
+                clientId,
+                syncFolder,
+                downloadFolder,
+                username: safeUsername,
+                serverUrl
+            });
+            app.start().catch(error => {
+                console.error('Fatal error starting application:'.red.bold, error.message);
+                process.exit(1);
+            });
+            rl.close();
         });
-        app.start().catch(error => {
-            console.error('Fatal error starting application:'.red.bold, error.message);
-            process.exit(1);
-        });
-        rl.close();
     });
 }
 

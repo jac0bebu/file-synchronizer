@@ -5,7 +5,7 @@ const path = require('path');
 
 class ApiClient {
     constructor(serverUrl) {
-        this.serverUrl = serverUrl || 'http://localhost:3000';
+        this.serverUrl = serverUrl || 'http://192.168.1.105:3000';
         console.log(`API Client initialized with server: ${this.serverUrl}`);
     }
 
