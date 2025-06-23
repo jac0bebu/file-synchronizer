@@ -73,9 +73,11 @@ class FileWatcher {
             console.log(`Ignoring ${eventType} event for ${path.basename(filePath)} (watcher paused)`.gray);
             return;
         }
-
         const fileName = path.basename(filePath);
-        
+        if (!fileName) {
+            console.warn('File watcher event missing fileName, skipping:', filePath, eventType);
+            return;
+        }
         // Skip if this specific file is being ignored
         if (this.ignoredFiles.has(fileName)) {
             console.log(`Ignoring ${eventType} event for ${fileName} (file being downloaded)`.gray);

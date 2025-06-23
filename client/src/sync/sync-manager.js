@@ -64,7 +64,10 @@ class SyncManager {
 
     async handleFileChange(fileEvent) {
         const { type, path: filePath, fileName } = fileEvent;
-        
+        if (!fileName) {
+            console.warn('File event missing fileName, skipping:', fileEvent);
+            return;
+        }
         try {
             this.updateSyncStatus(fileName, 'processing');
             

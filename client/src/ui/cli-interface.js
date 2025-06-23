@@ -22,7 +22,8 @@ class CliInterface {
             'pause': this.pauseSync.bind(this),
             'resume': this.resumeSync.bind(this),
             'config': this.showConfig.bind(this),
-            'restore': this.restoreVersion.bind(this) 
+            'restore': this.restoreVersion.bind(this),
+            'rename': this.renameFile.bind(this)
         };
     }
 
@@ -303,6 +304,7 @@ class CliInterface {
         console.log('  download-version'.cyan + ' - Download specific version');
         console.log('  restore'.cyan + ' <file> <version> - Restore a previous version as new');
         console.log('  conflicts'.cyan + '       - Show detected conflicts');
+        console.log('  rename'.cyan + ' <old> <new> - Rename a file');
         console.log('  pause'.cyan + '           - Pause synchronization');
         console.log('  resume'.cyan + '          - Resume synchronization');
         console.log('  config'.cyan + '          - Show current configuration');
@@ -338,6 +340,24 @@ class CliInterface {
                 this.rl.prompt();
             }
         );
+    }
+
+    async renameFile(args) {
+        if (!args || args.length < 2) {
+            console.log('Usage: rename <oldName> <newName>'.red);
+            return;
+        }
+        const [oldName, newName] = args;
+        try {
+            const result = await this.syncManager.api.renameFile(oldName, newName);
+            if (result.success) {
+                console.log(`✅ File renamed from ${oldName} to ${newName}`.green);
+            } else {
+                console.log(`❌ Failed to rename: ${result.error || 'Unknown error'}`.red);
+            }
+        } catch (error) {
+            console.error(`❌ Error renaming file:`, error.message.red);
+        }
     }
 
     quit() {

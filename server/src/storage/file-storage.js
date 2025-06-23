@@ -107,6 +107,25 @@ class FileStorage {
     calculateChecksum(buffer) {
         return crypto.createHash('md5').update(buffer).digest('hex');
     }
+
+    async renameFile(oldName, newName) {
+        await this.ensureDirectories();
+        // Rename main file
+        const oldPath = path.join(this.storagePath, oldName);
+        const newPath = path.join(this.storagePath, newName);
+        if (await fs.pathExists(oldPath)) {
+            await fs.move(oldPath, newPath, { overwrite: true });
+        }
+        // Rename all versioned files
+        const allVersions = await this.listVersions(oldName);
+        for (const version of allVersions) {
+            const oldVersionPath = path.join(this.versionsPath, version.file);
+            const newVersionFile = `${newName}.v${version.version}`;
+            const newVersionPath = path.join(this.versionsPath, newVersionFile);
+            await fs.move(oldVersionPath, newVersionPath, { overwrite: true });
+        }
+        return true;
+    }
 }
 
 module.exports = new FileStorage();

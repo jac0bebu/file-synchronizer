@@ -412,6 +412,22 @@ app.post('/files/:fileName/restore/:version', async (req, res) => {
     }
 });
 
+// Rename file (POST /files/:oldName/rename)
+app.post('/files/:oldName/rename', async (req, res) => {
+    try {
+        const oldName = decodeURIComponent(req.params.oldName);
+        const { newName } = req.body;
+        if (!newName) {
+            return res.status(400).json({ error: 'New file name required' });
+        }
+        await fileStorage.renameFile(oldName, newName);
+        await metadataStorage.renameFileMetadata(oldName, newName);
+        res.json({ success: true, message: `File renamed from ${oldName} to ${newName}` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(port, () => {
     console.log(`File Sync API running at http://localhost:${port}`);
