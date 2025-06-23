@@ -181,8 +181,8 @@ if (require.main === module) {
         }
         const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
         const clientId = `client-${safeUsername}`;
-        // Updated folder name here:
-        const syncFolder = path.resolve(__dirname, `../sync-folder-${safeUsername}`);
+        // Create sync folder inside client/sync-folder/
+        const syncFolder = path.resolve(__dirname, `../sync-folder/sync-folder-${safeUsername}`);
         const downloadFolder = path.resolve(__dirname, `../downloads/${safeUsername}`);
 
         const app = new SyncApplication({
