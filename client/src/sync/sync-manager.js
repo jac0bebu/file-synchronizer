@@ -26,27 +26,38 @@ class SyncManager {
     }
 
     async start() {
-        console.log('Starting sync manager...'.yellow);
-        
         try {
             // Ensure sync folder exists
             await fs.ensureDir(this.syncFolder);
-            
+
             // Test connection to server
             await this.api.getHealth();
-            
+
             // Initial sync
             await this.performFullSync();
-            
+
             // Start periodic sync
             this.startPeriodicSync();
-            
+
             console.log('Sync manager started successfully'.green.bold);
             return true;
-            
+
         } catch (error) {
-            console.error('Failed to start sync manager:'.red, error.message);
-            return false;
+            // Only log errors that are NOT connection errors
+            if (
+                error.message &&
+                (error.message.includes('ECONNREFUSED') ||
+                 error.message.includes('ENOTFOUND') ||
+                 error.message.includes('Server connection failed') ||
+                 error.message.includes('ETIMEDOUT'))
+            ) {
+                // Silent fail for connection errors, let app.js handle user prompt
+                return false;
+            } else {
+                // Log other errors
+                console.error('Failed to start sync manager:'.red, error.message);
+                return false;
+            }
         }
     }
 

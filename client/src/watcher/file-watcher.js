@@ -40,8 +40,6 @@ class FileWatcher {
     }
 
     start() {
-        console.log('Starting file watcher...'.yellow);
-        
         this.watcher = chokidar.watch(this.syncFolder, {
             ignored: /[\/\\]\./, // ignore dotfiles
             persistent: true,
