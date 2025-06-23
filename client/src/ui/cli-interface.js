@@ -1,9 +1,13 @@
 const readline = require('readline');
 const colors = require('colors');
+const path = require('path');
+const fs = require('fs-extra');
 
 class CliInterface {
-    constructor(syncManager) {
+    constructor(syncManager, options = {}) {
         this.syncManager = syncManager;
+        this.downloadFolder = options.downloadFolder || path.join(process.cwd(), 'downloads', options.username || 'unknown');
+        this.username = options.username || 'unknown';
         this.rl = null;
         this.commands = {
             'status': this.showStatus.bind(this),
@@ -166,8 +170,6 @@ class CliInterface {
             }
             
             // 2. Delete local file
-            const fs = require('fs-extra');
-            const path = require('path');
             const localPath = path.join(this.syncManager.syncFolder, fileName);
             
             if (await fs.pathExists(localPath)) {
@@ -222,10 +224,8 @@ class CliInterface {
             return;
         }
         const [fileName, version] = args;
-        const path = require('path');
-        const fs = require('fs-extra');
         // Place downloads outside sync folder, grouped by clientId
-        const downloadsDir = path.join(process.cwd(), 'downloads', this.syncManager.clientId);
+        const downloadsDir = this.downloadFolder;
         await fs.ensureDir(downloadsDir);
         const destinationPath = path.join(downloadsDir, `${fileName}.v${version}`);
 
@@ -347,3 +347,4 @@ class CliInterface {
 }
 
 module.exports = CliInterface;
+

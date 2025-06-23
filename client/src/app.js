@@ -13,6 +13,8 @@ class SyncApplication {
         this.syncFolder = options.syncFolder || path.join(__dirname, '../sync-folder');
         this.clientId = options.clientId || `client-${crypto.randomBytes(4).toString('hex')}`;
         this.pollInterval = options.pollInterval || 10000;
+        this.username = options.username || 'unknown';
+        this.downloadFolder = options.downloadFolder || path.join(__dirname, '../downloads', this.username);
         
         // Initialize components
         this.apiClient = new ApiClient(this.serverUrl);
@@ -29,7 +31,11 @@ class SyncApplication {
         // CRITICAL: Connect file watcher to sync manager
         this.syncManager.fileWatcher = this.fileWatcher;
 
-        this.ui = new CliInterface(this.syncManager);
+        // Pass downloadFolder and username to UI and SyncManager if needed
+        this.ui = new CliInterface(this.syncManager, {
+            downloadFolder: this.downloadFolder,
+            username: this.username
+        });
     }
     
     async start() {
@@ -162,10 +168,34 @@ class SyncApplication {
 
 // Start the application if run directly
 if (require.main === module) {
-    const app = new SyncApplication();
-    app.start().catch(error => {
-        console.error('Fatal error starting application:'.red.bold, error.message);
-        process.exit(1);
+    const readline = require('readline');
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    rl.question('Enter your username: ', (username) => {
+        if (!username || !username.trim()) {
+            console.error('Username is required!');
+            process.exit(1);
+        }
+        const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+        const clientId = `client-${safeUsername}`;
+        // Updated folder name here:
+        const syncFolder = path.resolve(__dirname, `../sync-folder-${safeUsername}`);
+        const downloadFolder = path.resolve(__dirname, `../downloads/${safeUsername}`);
+
+        const app = new SyncApplication({
+            clientId,
+            syncFolder,
+            downloadFolder,
+            username: safeUsername
+        });
+        app.start().catch(error => {
+            console.error('Fatal error starting application:'.red.bold, error.message);
+            process.exit(1);
+        });
+        rl.close();
     });
 }
 
