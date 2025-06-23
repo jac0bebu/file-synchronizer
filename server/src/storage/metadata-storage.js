@@ -164,6 +164,22 @@ class MetadataStorage {
         const latest = await this.getLatestVersion(fileName);
         return latest ? latest.version + 1 : 1;
     }
+
+    async renameFileMetadata(oldName, newName) {
+        await this.initPromise;
+        const allData = await this.getAllMetadata();
+        let changed = false;
+        for (let item of allData) {
+            if (item.fileName === oldName) {
+                item.fileName = newName;
+                changed = true;
+            }
+        }
+        if (changed) {
+            await fs.writeJson(this.dbFile, allData, { spaces: 2 });
+        }
+        return changed;
+    }
 }
 
 module.exports = new MetadataStorage();

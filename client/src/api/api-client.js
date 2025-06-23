@@ -156,6 +156,17 @@ class ApiClient {
             throw error;
         }
     }
+
+    async renameFile(oldName, newName) {
+        try {
+            const response = await axios.post(`${this.serverUrl}/files/${encodeURIComponent(oldName)}/rename`, {
+                newName
+            });
+            return response.data;
+        } catch (error) {
+            throw error;
+        }
+    }
 }
 
 module.exports = ApiClient;
