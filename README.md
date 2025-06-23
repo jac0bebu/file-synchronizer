@@ -108,6 +108,7 @@ sync>
 | `help` | Show available commands | `help` |
 | `quit` | Exit the application | `quit` |
 | `download` | Download File | `download-version <filename> <version>` |
+| `rename` | Rename a file (does not change version, does not create a new version) | `rename <oldName> <newName>` |
 
 ## 🔄 How It Works
 
@@ -302,4 +303,4 @@ This project is for educational purposes demonstrating distributed systems conce
 
 ---
 
-**Built with Node.js • Express • Real-time File
+**Built with Node.js • Express • Real-time File Synchronization**
