@@ -179,7 +179,7 @@ if (require.main === module) {
             console.error('Username is required!');
             process.exit(1);
         }
-        rl.question('Enter the server IP address (e.g., 192.168.1.105): ', (ip) => {
+        rl.question('Enter the server IP address: ', (ip) => {
             if (!ip || !ip.trim()) {
                 console.error('Server IP address is required!');
                 process.exit(1);

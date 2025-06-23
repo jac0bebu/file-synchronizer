@@ -5,7 +5,10 @@ const path = require('path');
 
 class ApiClient {
     constructor(serverUrl) {
-        this.serverUrl = serverUrl || 'http://192.168.1.105:3000';
+        if (!serverUrl) {
+            throw new Error('Server URL must be provided to ApiClient!');
+        }
+        this.serverUrl = serverUrl;
         console.log(`API Client initialized with server: ${this.serverUrl}`);
     }
 

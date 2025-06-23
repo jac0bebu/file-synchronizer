@@ -3,6 +3,7 @@ const multer = require('multer');
 const cors = require('cors');
 const fs = require('fs-extra');
 const path = require('path');
+const os = require('os');
 
 const queueManager = require('../queues/queue-manager');
 const fileStorage = require('../storage/file-storage');
@@ -428,10 +429,24 @@ app.post('/files/:oldName/rename', async (req, res) => {
     }
 });
 
+// Helper to get local IP address
+function getLocalIp() {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
+            }
+        }
+    }
+    return 'localhost';
+}
+
 // Start server
 app.listen(port, '0.0.0.0', () => {
-    console.log(`File Sync API running at http://192.168.1.105:${port}`);
-    console.log(`Health check: http://192.168.1.105:${port}/health`);
+    const ip = getLocalIp();
+    console.log(`File Sync API running at http://${ip}:${port}`);
+    console.log(`Health check: http://${ip}:${port}/health`);
 });
 
 module.exports = app;
