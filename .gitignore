@@ -49,6 +49,7 @@ server/src/storage/metadata/*
 
 # Client sync folder - EXCLUDE user files
 client/sync-folder/*
+client/sync-folder-client2/*
 !client/sync-folder/.gitkeep
 
 # Test directories
