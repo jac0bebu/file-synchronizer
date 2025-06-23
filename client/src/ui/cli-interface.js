@@ -24,7 +24,7 @@ class CliInterface {
             'config': this.showConfig.bind(this),
             'restore': this.restoreVersion.bind(this),
             'rename': this.renameFile.bind(this),
-            'resolve': this.resolveConflict.bind(this)
+            'resolve': this.resolveConflictById.bind(this)
         };
     }
 
@@ -51,17 +51,161 @@ class CliInterface {
         this.rl.prompt();
     }
 
-    async resolveConflict(args) {
+    async resolveConflictById(args) {
         if (!args || args.length === 0) {
-            console.log('Usage: resolve <filename>'.yellow);
+            console.log('Usage: resolve <conflictId>'.yellow);
+            if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
             return;
         }
-        const fileName = args[0];
-        if (typeof this.syncManager.resolvePendingConflict === 'function') {
-            await this.syncManager.resolvePendingConflict(fileName);
-        } else {
-            console.log('Conflict resolution is not available.'.red);
+        const conflictId = args[0];
+        try {
+            // Fetch conflict details from server
+            const conflicts = await this.syncManager.api.getConflicts();
+            const conflict = Array.isArray(conflicts)
+                ? conflicts.find(c => c.id === conflictId)
+                : null;
+            if (!conflict) {
+                console.log(`No conflict found with ID: ${conflictId}`.red);
+                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+                return;
+            }
+            // Display both versions
+            await this.displayConflictDetails(conflict);
+            // Prompt user for resolution
+            const resolution = await this.promptConflictResolution(conflict);
+            if (resolution.type === 'skip') {
+                console.log('Conflict skipped. You can resolve it later.'.yellow);
+                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+                return;
+            }
+            // Send resolution to server
+            await this.syncManager.api.resolveConflict(conflictId, {
+                resolution: resolution.type,
+                keepVersion: resolution.keepVersion || undefined,
+                clientId: this.syncManager.clientId
+            });
+            console.log('✅ Conflict resolved and marked on server.'.green);
+        } catch (error) {
+            console.error('Error resolving conflict:'.red, error.message);
         }
+        // Always restore CLI prompt after conflict resolution
+        if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+    }
+
+    async displayConflictDetails(conflict) {
+        // Show local and server versions with size, timestamp, and content preview
+        console.log(`\n📄 File: ${conflict.fileName}`.cyan.bold);
+        console.log('-'.repeat(60));
+        // Local (incoming) version
+        const local = conflict.incoming;
+        console.log('🏠 LOCAL VERSION:'.green.bold);
+        console.log(`   📏 Size: ${local.size} bytes`);
+        console.log(`   📅 Modified: ${new Date(local.lastModified).toLocaleString()}`);
+        console.log('   📝 Content Preview:');
+        console.log('   ' + '-'.repeat(40));
+        let localContent = local.content;
+        if (!localContent) {
+            // Try to read from sync folder
+            const localPath = path.join(this.syncManager.syncFolder, conflict.fileName);
+            try {
+                localContent = await fs.readFile(localPath, 'utf-8');
+            } catch {}
+        }
+        if (!localContent) localContent = '[content not available]';
+        const localPreview = localContent.length > 200 ? localContent.substring(0, 200) + '...' : localContent;
+        console.log(`   ${localPreview.split('\n').join('\n   ')}`);
+        console.log('   ' + '-'.repeat(40));
+        console.log('');
+        // Server (existing) version
+        const server = conflict.existing;
+        if (server) {
+            console.log('🌐 SERVER VERSION:'.blue.bold);
+            console.log(`   📏 Size: ${server.size} bytes`);
+            console.log(`   📅 Modified: ${new Date(server.lastModified).toLocaleString()}`);
+            console.log(`   🔢 Version: ${server.version || 'unknown'}`);
+            console.log('   📝 Content Preview:');
+            console.log('   ' + '-'.repeat(40));
+            let serverContent = server.content;
+            if (!serverContent && this.syncManager.api.downloadFileVersion) {
+                // Try to download the server version to a temp file and read it
+                const os = require('os');
+                const tempPath = path.join(os.tmpdir(), `conflict-server-${conflict.fileName}.v${server.version}`);
+                try {
+                    await this.syncManager.api.downloadFileVersion(conflict.fileName, server.version, tempPath);
+                    serverContent = await fs.readFile(tempPath, 'utf-8');
+                    await fs.remove(tempPath);
+                } catch {}
+            }
+            if (!serverContent) serverContent = '[content not available]';
+            const serverPreview = serverContent.length > 200 ? serverContent.substring(0, 200) + '...' : serverContent;
+            console.log(`   ${serverPreview.split('\n').join('\n   ')}`);
+            console.log('   ' + '-'.repeat(40));
+        } else {
+            console.log('🌐 SERVER VERSION: Not available'.red);
+        }
+        console.log('\n' + '='.repeat(60));
+    }
+
+    async promptConflictResolution(conflict) {
+        // Use raw mode for single keypress input
+        const validChoices = ['1', '2', 's', 'h'];
+        console.log(`\n🤔 How would you like to resolve this conflict?`.yellow.bold);
+        console.log('');
+        console.log('Available options:'.cyan);
+        console.log('  [1] Keep LOCAL version (overwrite server)');
+        console.log('  [2] Keep SERVER version (overwrite local)');
+        console.log('  [s] Skip for now (resolve later)');
+        console.log('  [h] Show help');
+        console.log('');
+        return new Promise((resolve) => {
+            const flushStdin = () => {
+                // Flush any buffered input after raw mode
+                while (process.stdin.read());
+            };
+            const restoreReadline = () => {
+                try {
+                    process.stdin.setRawMode(false);
+                } catch {}
+                process.stdin.resume();
+                if (this.rl && typeof this.rl.resume === 'function') this.rl.resume();
+                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+            };
+            const onData = (buffer) => {
+                const choice = buffer.toString().trim();
+                if (!validChoices.includes(choice)) {
+                    process.stdout.write('\u001b[31mInvalid choice. Please enter 1, 2, s, or h\u001b[0m\n');
+                    return;
+                }
+                process.stdin.setRawMode(false);
+                process.stdin.pause();
+                process.stdin.removeListener('data', onData);
+                if (choice === 'h') {
+                    this.showConflictHelp();
+                    process.stdin.setRawMode(true);
+                    process.stdin.resume();
+                    process.stdin.on('data', onData);
+                    return;
+                }
+                // Show immediate feedback for the user's choice
+                if (choice === '1') {
+                    console.log('✅ You chose to keep the LOCAL version (overwrite server).'.green);
+                } else if (choice === '2') {
+                    console.log('✅ You chose to keep the SERVER version (overwrite local).'.blue);
+                } else if (choice === 's') {
+                    console.log('⏸️  You chose to skip this conflict for now.'.yellow);
+                }
+                // Flush any buffered input before restoring prompt
+                flushStdin();
+                setTimeout(restoreReadline, 0);
+                resolve({
+                    type: choice === '1' ? 'local' : choice === '2' ? 'server' : 'skip',
+                    keepVersion: choice === '1' ? 'incoming' : choice === '2' ? 'existing' : undefined
+                });
+            };
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
+            process.stdin.on('data', onData);
+        });
     }
 
     handleCommand(input) {
@@ -319,32 +463,32 @@ class CliInterface {
     }
 
     async showConflicts() {
-        try {
-            console.log('\n⚠️ Conflicts:'.yellow.bold);
-            const conflicts = await this.syncManager.api.getConflicts();
-            
-            if (conflicts.length === 0) {
-                console.log('No conflicts found.'.green);
-                return;
-            }
-            
-            conflicts.forEach(conflict => {
-                const status = conflict.status === 'resolved' ? 'RESOLVED'.green : 'UNRESOLVED'.red;
-                console.log(`- ${conflict.fileName} [${status}]`.white);
-                console.log(`  ID: ${conflict.id}`.gray);
-                console.log(`  Reason: ${conflict.reason}`.yellow);
-                
-                if (conflict.status === 'resolved' && conflict.resolution) {
-                    console.log(`  Resolution: ${conflict.resolution.method}`.green);
-                    console.log(`  Resolved by: ${conflict.resolution.resolvedBy}`.green);
-                    console.log(`  Resolved at: ${new Date(conflict.resolvedAt).toLocaleString()}`.green);
-                }
-            });
-            
-        } catch (error) {
-            console.error('Failed to fetch conflicts:'.red, error.message);
+    try {
+        console.log('\n⚠️ Conflicts:'.yellow.bold);
+        const conflicts = await this.syncManager.api.getConflicts();
+        
+        if (conflicts.length === 0) {
+            console.log('No conflicts found.'.green);
+            return;
         }
+        
+        conflicts.forEach(conflict => {
+            const status = conflict.status === 'resolved' ? 'RESOLVED'.green : 'UNRESOLVED'.red;
+            console.log(`- ${conflict.fileName} [${status}]`.white);
+            console.log(`  ID: ${conflict.id}`.gray);
+            console.log(`  Reason: ${conflict.reason}`.yellow);
+            
+            if (conflict.status === 'resolved' && conflict.resolution) {
+                console.log(`  Resolution: ${conflict.resolution.method}`.green);
+                console.log(`  Resolved by: ${conflict.resolution.resolvedBy}`.green);
+                console.log(`  Resolved at: ${new Date(conflict.resolvedAt).toLocaleString()}`.green);
+            }
+        });
+        
+    } catch (error) {
+        console.error('Failed to fetch conflicts:'.red, error.message);
     }
+}
 
     showHelp() {
         console.log('\n📚 Available Commands:'.blue.bold);
@@ -356,7 +500,7 @@ class CliInterface {
         console.log('  download-version'.cyan + ' - Download specific version');
         console.log('  restore'.cyan + ' <file> <version> - Restore a previous version as new');
         console.log('  conflicts'.cyan + '       - Show detected conflicts');
-        console.log('  resolve'.cyan + ' <file>   - Resolve a conflict for a file');
+        console.log('  resolve'.cyan + ' <conflictId>    - Resolve a file conflict by conflict ID (see conflicts command)');
         console.log('  rename'.cyan + ' <old> <new> - Rename a file');
         console.log('  pause'.cyan + '           - Pause synchronization');
         console.log('  resume'.cyan + '          - Resume synchronization');

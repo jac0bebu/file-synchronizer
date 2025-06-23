@@ -217,6 +217,44 @@ class SyncManager {
         }
     }
 
+    displayConflictVersions(fileName, localInfo, serverInfo) {
+        console.log(`\n📄 File: ${fileName}`.cyan.bold);
+        console.log('-'.repeat(60));
+        
+        // Local version
+        console.log('🏠 LOCAL VERSION:'.green.bold);
+        console.log(`   📏 Size: ${localInfo.size} bytes`);
+        console.log(`   📅 Modified: ${new Date(localInfo.lastModified).toLocaleString()}`);
+        console.log(`   📝 Content Preview:`);
+        console.log('   ' + '-'.repeat(40));
+        const localPreview = localInfo.content.length > 200 
+            ? localInfo.content.substring(0, 200) + '...' 
+            : localInfo.content;
+        console.log(`   ${localPreview.split('\n').join('\n   ')}`);
+        console.log('   ' + '-'.repeat(40));
+        
+        console.log('');
+        
+        // Server version
+        if (serverInfo) {
+            console.log('🌐 SERVER VERSION:'.blue.bold);
+            console.log(`   📏 Size: ${serverInfo.size} bytes`);
+            console.log(`   📅 Modified: ${new Date(serverInfo.lastModified).toLocaleString()}`);
+            console.log(`   🔢 Version: ${serverInfo.version || 'unknown'}`);
+            console.log(`   📝 Content Preview:`);
+            console.log('   ' + '-'.repeat(40));
+            const serverPreview = serverInfo.content.length > 200 
+                ? serverInfo.content.substring(0, 200) + '...' 
+                : serverInfo.content;
+            console.log(`   ${serverPreview.split('\n').join('\n   ')}`);
+            console.log('   ' + '-'.repeat(40));
+        } else {
+            console.log('🌐 SERVER VERSION: Not available'.red);
+        }
+        
+        console.log('\n' + '='.repeat(60));
+    }
+
     // Display both versions with detailed information
     displayConflictVersions(fileName, localInfo, serverInfo) {
         console.log(`\n📄 File: ${fileName}`.cyan.bold);
@@ -256,66 +294,68 @@ class SyncManager {
         console.log('\n' + '='.repeat(60));
     }
 
-    // Prompt user for conflict resolution choice
+    // Prompt user for conflict resolution choice (single keypress, raw mode)
     async promptConflictResolution(fileName, localInfo, serverInfo) {
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
-        
-        const question = (query) => new Promise(resolve => rl.question(query, resolve));
-        
+        const validChoices = ['1', '2', 's', 'h'];
+        if (serverInfo) {
+            validChoices.push('3', '4');
+        }
+
         console.log(`\n🤔 How would you like to resolve this conflict?`.yellow.bold);
         console.log('');
         console.log('Available options:'.cyan);
         console.log('  [1] Keep LOCAL version (overwrite server)');
         console.log('  [2] Keep SERVER version (overwrite local)');
-        
         if (serverInfo) {
             console.log('  [3] Show FULL content comparison');
             console.log('  [4] Create MERGED version (manual edit)');
         }
-        
         console.log('  [s] Skip for now (resolve later)');
         console.log('  [h] Show help');
         console.log('');
-        
-        let choice;
-        while (true) {
-            choice = await question(`Choose your option for ${fileName}: `);
-            
-            if (['1', '2', 's'].includes(choice)) {
-                break;
-            }
-            
-            if (choice === '3' && serverInfo) {
-                this.showFullComparison(localInfo, serverInfo);
-                continue;
-            }
-            
-            if (choice === '4' && serverInfo) {
-                const mergedPath = await this.createMergedVersion(fileName, localInfo, serverInfo);
-                if (mergedPath) {
-                    rl.close();
-                    return { type: 'merge', path: mergedPath };
+
+        return new Promise((resolve) => {
+            const onData = async (buffer) => {
+                const choice = buffer.toString().trim();
+                if (!validChoices.includes(choice)) {
+                    process.stdout.write('\u001b[31mInvalid choice. Please enter 1, 2' + (serverInfo ? ', 3, 4' : '') + ', s, or h\u001b[0m\n');
+                    return;
                 }
-                continue;
-            }
-            
-            if (choice === 'h') {
-                this.showConflictHelp();
-                continue;
-            }
-            
-            console.log('Invalid choice. Please enter 1, 2, 3, 4, s, or h'.red);
-        }
-        
-        rl.close();
-        
-        return {
-            type: choice === '1' ? 'local' : choice === '2' ? 'server' : 'skip',
-            choice: choice
-        };
+                process.stdin.setRawMode(false);
+                process.stdin.pause();
+                process.stdin.removeListener('data', onData);
+
+                if (choice === '3' && serverInfo) {
+                    this.showFullComparison(localInfo, serverInfo);
+                    // Re-enable raw mode for next input
+                    process.stdin.setRawMode(true);
+                    process.stdin.resume();
+                    process.stdin.on('data', onData);
+                    return;
+                }
+                if (choice === '4' && serverInfo) {
+                    const mergedPath = await this.createMergedVersion(fileName, localInfo, serverInfo);
+                    resolve({ type: 'merge', path: mergedPath });
+                    return;
+                }
+                if (choice === 'h') {
+                    this.showConflictHelp();
+                    // Re-enable raw mode for next input
+                    process.stdin.setRawMode(true);
+                    process.stdin.resume();
+                    process.stdin.on('data', onData);
+                    return;
+                }
+                // 1, 2, s
+                resolve({
+                    type: choice === '1' ? 'local' : choice === '2' ? 'server' : 'skip',
+                    choice: choice
+                });
+            };
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
+            process.stdin.on('data', onData);
+        });
     }
 
     // Show full content comparison
@@ -397,6 +437,7 @@ class SyncManager {
             return null;
         }
     }
+    
 
     // Show help for conflict resolution
     showConflictHelp() {
