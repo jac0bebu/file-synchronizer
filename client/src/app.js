@@ -193,9 +193,9 @@ if (require.main === module) {
             console.error('Username is required!');
             process.exit(1);
         }
-        rl.question('Enter the server IP address: ', async (ip) => {
-            if (!ip || !ip.trim() || !isValidIp(ip.trim())) {
-                console.error('Invalid server IP address! Please enter a valid IPv4 address (e.g., 192.168.1.105) or "localhost".');
+        rl.question('Enter the server IP address: ', (ip) => {
+            if (!ip || !ip.trim()) {
+                console.error('Server IP address is required!');
                 process.exit(1);
             }
             const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -211,14 +211,10 @@ if (require.main === module) {
                 username: safeUsername,
                 serverUrl
             });
-
-            const started = await app.start();
-            if (!started) {
-                console.log('\n❌ Could not connect to the server at the provided IP address.'.red.bold);
-                console.log('The server may not be running, or you may have mistyped the address.'.yellow);
-                console.log('Please restart the client and try entering the server IP address again.\n'.yellow);
+            app.start().catch(error => {
+                console.error('Fatal error starting application:'.red.bold, error.message);
                 process.exit(1);
-            }
+            });
             rl.close();
         });
     });
