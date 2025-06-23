@@ -23,7 +23,8 @@ class CliInterface {
             'resume': this.resumeSync.bind(this),
             'config': this.showConfig.bind(this),
             'restore': this.restoreVersion.bind(this),
-            'rename': this.renameFile.bind(this)
+            'rename': this.renameFile.bind(this),
+            'resolve': this.resolveConflict.bind(this)
         };
     }
 
@@ -50,6 +51,19 @@ class CliInterface {
         this.rl.prompt();
     }
 
+    async resolveConflict(args) {
+        if (!args || args.length === 0) {
+            console.log('Usage: resolve <filename>'.yellow);
+            return;
+        }
+        const fileName = args[0];
+        if (typeof this.syncManager.resolvePendingConflict === 'function') {
+            await this.syncManager.resolvePendingConflict(fileName);
+        } else {
+            console.log('Conflict resolution is not available.'.red);
+        }
+    }
+
     handleCommand(input) {
         const [command, ...args] = input.split(' ');
 
@@ -69,6 +83,45 @@ class CliInterface {
         } else if (command) {
             console.log(`Unknown command: ${command}. Type "help" for available commands.`.red);
         }
+    }
+
+    // In your CLI interface (cli-interface.js or similar)
+    async handleConflictCommands(command, args) {
+        switch (command) {
+            case 'conflicts':
+            case 'list-conflicts':
+                this.syncManager.listPendingConflicts();
+                break;
+                
+            case 'resolve':
+                if (args[0]) {
+                    await this.syncManager.resolvePendingConflict(args[0]);
+                } else {
+                    console.log('Usage: resolve <filename>'.yellow);
+                }
+                break;
+                
+            case 'conflict-history':
+                this.showConflictHistory();
+                break;
+        }
+    }
+
+    showConflictHistory() {
+        console.log('\n📚 CONFLICT HISTORY'.blue.bold);
+        console.log('='.repeat(40));
+        
+        if (this.syncManager.conflictHistory.size === 0) {
+            console.log('No resolved conflicts in history'.gray);
+            return;
+        }
+        
+        this.syncManager.conflictHistory.forEach((conflict, fileName) => {
+            console.log(`✅ ${fileName}`.green);
+            console.log(`   Resolved: ${conflict.resolvedAt.toLocaleString()}`);
+            console.log(`   Resolution: ${conflict.resolution.type}`);
+            console.log('');
+        });
     }
 
     async showStatus() {
@@ -155,13 +208,13 @@ class CliInterface {
             console.log('Usage: delete <filename>'.red);
             return;
         }
-        
         const fileName = args[0];
-        
+
+        // Always sync before delete to ensure latest state
+        await this.syncManager.performFullSync();
+
         try {
-            console.log(`Deleting file: ${fileName}...`.yellow);
-            
-            // 1. Delete from server FIRST
+            // Try to delete from server
             try {
                 await this.syncManager.api.deleteFile(fileName);
                 console.log(`✅ File ${fileName} deleted from server`.green);
@@ -169,17 +222,16 @@ class CliInterface {
             } catch (error) {
                 console.log(`File ${fileName} not found on server or already deleted`.yellow);
             }
-            
-            // 2. Delete local file
+
+            // Delete local file if it exists
             const localPath = path.join(this.syncManager.syncFolder, fileName);
-            
             if (await fs.pathExists(localPath)) {
                 await fs.remove(localPath);
                 console.log(`✅ File ${fileName} deleted locally`.green);
             }
-            
+
             console.log(`🗑️ File ${fileName} deleted successfully`.green.bold);
-            
+
         } catch (error) {
             console.error(`Error deleting ${fileName}:`.red, error.message);
         }
@@ -304,6 +356,7 @@ class CliInterface {
         console.log('  download-version'.cyan + ' - Download specific version');
         console.log('  restore'.cyan + ' <file> <version> - Restore a previous version as new');
         console.log('  conflicts'.cyan + '       - Show detected conflicts');
+        console.log('  resolve'.cyan + ' <file>   - Resolve a conflict for a file');
         console.log('  rename'.cyan + ' <old> <new> - Rename a file');
         console.log('  pause'.cyan + '           - Pause synchronization');
         console.log('  resume'.cyan + '          - Resume synchronization');
