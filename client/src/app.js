@@ -188,57 +188,51 @@ if (require.main === module) {
         output: process.stdout
     });
 
-    function isValidIp(ip) {
-        ip = ip.trim();
-        if (ip.toLowerCase() === 'localhost') return true;
-        const parts = ip.split('.');
-        if (parts.length !== 4) return false;
-        return parts.every(part => {
-            const n = Number(part);
-            return /^\d+$/.test(part) && n >= 0 && n <= 255;
-        });
-    }
-
     rl.question('Enter your username: ', (username) => {
         if (!username || !username.trim()) {
             console.error('Username is required!');
             process.exit(1);
         }
-        const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-        const clientId = `client-${safeUsername}`;
-        const syncFolder = path.resolve(__dirname, `../sync-folder/sync-folder-${safeUsername}`);
-        const downloadFolder = path.resolve(__dirname, `../downloads/${safeUsername}`);
+        rl.question('Enter the server IP address: ', async (ip) => {
+            if (!ip || !ip.trim() || !isValidIp(ip.trim())) {
+                console.error('Invalid server IP address! Please enter a valid IPv4 address (e.g., 192.168.1.105) or "localhost".');
+                process.exit(1);
+            }
+            const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+            const clientId = `client-${safeUsername}`;
+            const syncFolder = path.resolve(__dirname, `../sync-folder/sync-folder-${safeUsername}`);
+            const downloadFolder = path.resolve(__dirname, `../downloads/${safeUsername}`);
+            const serverUrl = `http://${ip.trim()}:3000`;
 
-        function askIpAndStart() {
-            rl.question('Enter the server IP address: ', async (ip) => {
-                if (!ip || !ip.trim() || !isValidIp(ip.trim())) {
-                    console.error('Invalid server IP address! Please enter a valid IPv4 address (e.g., 192.168.1.105) or "localhost".');
-                    return askIpAndStart();
-                }
-                const serverUrl = `http://${ip.trim()}:3000`;
-                console.log(`Connecting to the server at ${serverUrl} ...`.cyan);
-
-                const app = new SyncApplication({
-                    clientId,
-                    syncFolder,
-                    downloadFolder,
-                    username: safeUsername,
-                    serverUrl
-                });
-
-                const started = await app.start();
-                if (!started) {
-                    console.log('\n❌ Could not connect to the server at the provided IP address.'.red.bold);
-                    console.log('The server may not be running, or you may have mistyped the address.'.yellow);
-                    console.log('Please try entering the server IP address again.\n'.yellow);
-                    return askIpAndStart();
-                }
-                // Do NOT call rl.close() here!
+            const app = new SyncApplication({
+                clientId,
+                syncFolder,
+                downloadFolder,
+                username: safeUsername,
+                serverUrl
             });
-        }
 
-        askIpAndStart();
+            const started = await app.start();
+            if (!started) {
+                console.log('\n❌ Could not connect to the server at the provided IP address.'.red.bold);
+                console.log('The server may not be running, or you may have mistyped the address.'.yellow);
+                console.log('Please restart the client and try entering the server IP address again.\n'.yellow);
+                process.exit(1);
+            }
+            rl.close();
+        });
     });
 }
 
 module.exports = SyncApplication;
+
+function isValidIp(ip) {
+    ip = ip.trim();
+    if (ip.toLowerCase() === 'localhost') return true;
+    const parts = ip.split('.');
+    if (parts.length !== 4) return false;
+    return parts.every(part => {
+        const n = Number(part);
+        return /^\d+$/.test(part) && n >= 0 && n <= 255;
+    });
+}
