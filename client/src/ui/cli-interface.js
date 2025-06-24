@@ -2,6 +2,7 @@ const readline = require('readline');
 const colors = require('colors');
 const path = require('path');
 const fs = require('fs-extra');
+const stringArgv = require('string-argv').default || require('string-argv');
 
 class CliInterface {
     constructor(syncManager, options = {}) {
@@ -209,13 +210,10 @@ class CliInterface {
     }
 
     handleCommand(input) {
-        const [command, ...args] = input.split(' ');
-
+        const [command, ...args] = stringArgv(input);
         if (this.commands[command]) {
             try {
                 const result = this.commands[command](args);
-                
-                // Handle async commands properly
                 if (result && typeof result.catch === 'function') {
                     result.catch(error => {
                         console.error(`Error executing ${command}:`.red, error.message);
