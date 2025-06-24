@@ -372,6 +372,74 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
             }
         }
 
+        // --- Prevent duplicate conflict for same set of clients/checksums ---
+        // Compose a unique conflict key for this set
+        let conflictKey = null;
+        if (isConflict) {
+            // All unique clientId+checksum pairs in this conflict
+            let allCandidates = [
+                ...arr.map(entry => ({ clientId: entry.clientId, checksum: entry.checksum })),
+                { clientId, checksum }
+            ];
+            allCandidates = allCandidates.filter((entry, idx, self) =>
+                idx === self.findIndex(e => e.clientId === entry.clientId && e.checksum === entry.checksum)
+            );
+            // Sort for stable key
+            allCandidates.sort((a, b) => (a.clientId + a.checksum).localeCompare(b.clientId + b.checksum));
+            conflictKey = fileName + ':' + allCandidates.map(e => `${e.clientId}:${e.checksum}`).join('|');
+            // Store conflictKey in recentUploads to prevent duplicate
+            if (!recentUploads.conflictKeys) recentUploads.conflictKeys = new Set();
+            if (recentUploads.conflictKeys.has(conflictKey)) {
+                // Already processed this conflict, just respond as before but do not create new versions/conflict files
+                // Find winner/losers as before for response
+                let allCandidatesFull = [
+                    ...arr.map(entry => ({ ...entry })),
+                    { ...metadata, buffer: fileBuffer, timestamp: now }
+                ];
+                allCandidatesFull = allCandidatesFull.filter((entry, idx, self) =>
+                    idx === self.findIndex(e => e.clientId === entry.clientId && e.checksum === entry.checksum)
+                );
+                allCandidatesFull.sort((a, b) => new Date(a.lastModified).getTime() - new Date(b.lastModified).getTime());
+                winner = allCandidatesFull[0];
+                losers = allCandidatesFull.slice(1);
+
+                // If this client is a loser, notify with all conflict info
+                const isCurrentLoser = losers.some(l => l.clientId === clientId && l.checksum === checksum);
+                if (isCurrentLoser) {
+                    res.status(409).json({
+                        success: false,
+                        error: 'Conflict detected',
+                        message: `Conflict detected: "${fileName}" was modified by multiple clients at nearly the same time. The version from "${winner.clientId}" was kept. Your version was saved as a conflict file.`,
+                        conflict: {
+                            fileName,
+                            winner: {
+                                clientId: winner.clientId,
+                                lastModified: winner.lastModified
+                            },
+                            losers: losers.map(l => ({
+                                clientId: l.clientId,
+                                lastModified: l.lastModified
+                            })),
+                            conflictId: 'already-exists'
+                        },
+                        action: 'resolve_conflict'
+                    });
+                    return;
+                }
+                // If this client is the winner, return success
+                res.json({
+                    success: true,
+                    message: `File uploaded successfully as the fastest client. Other conflicting clients: ${losers.map(l => l.clientId).join(', ')}`,
+                    version: undefined,
+                    metadata: {},
+                    conflictId: 'already-exists'
+                });
+                return;
+            }
+            // Mark this conflictKey as processed
+            recentUploads.conflictKeys.add(conflictKey);
+        }
+
         if (!isConflict) {
             // No conflict, save as normal
             const nextVersion = await metadataStorage.getNextVersion(fileName);
@@ -427,7 +495,7 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
         // Save each loser as a conflict file
         const loserMetas = [];
         for (const loser of losers) {
-            const conflictFileName = `${fileName.replace(/(\.[^\.]+)?$/, '')}_conflicted_by_${loser.clientId}${path.extname(fileName)}`;
+            const conflictFileName = `${fileName.replace(/(\.[^\.]+)?$/, '')}_conflicted_by_${loser.clientId}${require('path').extname(fileName)}`;
             const conflictVersion = await metadataStorage.getNextVersion(conflictFileName);
             await fileStorage.saveFile(conflictFileName, loser.buffer, conflictVersion);
             const loserMeta = await metadataStorage.saveMetadata({

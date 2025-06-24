@@ -86,7 +86,7 @@ class SyncManager {
         try {
             this.updateSyncStatus(fileName, 'processing');
             
-            if (type === 'unlink') {
+            if (type === 'delete' || type === 'unlink') {
                 // Handle file deletion - mark for server deletion
                 console.log(`File deleted locally: ${fileName}`.red);
                 this.markForDeletion(fileName);
