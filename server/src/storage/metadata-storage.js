@@ -31,7 +31,9 @@ class MetadataStorage {
         // Check for conflicts
         const conflict = await this.detectConflict(metadata);
         if (conflict) {
-            await this.saveConflict(conflict);
+            await this.saveConflict(conflict); // Ensure conflict is saved
+            // Optionally: Save the conflicted file's metadata here if needed
+            // await this.saveMetadataForConflictedFile(metadata);
             throw new Error(`Conflict detected: ${conflict.reason}`);
         }
 
@@ -92,8 +94,11 @@ class MetadataStorage {
     async saveConflict(conflict) {
         await this.initPromise;
         const conflicts = await fs.readJson(this.conflictsFile);
-        conflicts.push(conflict);
-        await fs.writeJson(this.conflictsFile, conflicts, { spaces: 2 });
+        // Prevent duplicate conflict id
+        if (!conflicts.some(c => c.id === conflict.id)) {
+            conflicts.push(conflict);
+            await fs.writeJson(this.conflictsFile, conflicts, { spaces: 2 });
+        }
     }
 
     async getConflicts() {

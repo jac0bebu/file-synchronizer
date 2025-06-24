@@ -72,20 +72,7 @@ class CliInterface {
             }
             // Display both versions
             await this.displayConflictDetails(conflict);
-            // Prompt user for resolution
-            const resolution = await this.promptConflictResolution(conflict);
-            if (resolution.type === 'skip') {
-                console.log('Conflict skipped. You can resolve it later.'.yellow);
-                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
-                return;
-            }
-            // Send resolution to server
-            await this.syncManager.api.resolveConflict(conflictId, {
-                resolution: resolution.type,
-                keepVersion: resolution.keepVersion || undefined,
-                clientId: this.syncManager.clientId
-            });
-            console.log('✅ Conflict resolved and marked on server.'.green);
+            // No prompt for resolution, just display details
         } catch (error) {
             console.error('Error resolving conflict:'.red, error.message);
         }
@@ -145,68 +132,6 @@ class CliInterface {
             console.log('🌐 SERVER VERSION: Not available'.red);
         }
         console.log('\n' + '='.repeat(60));
-    }
-
-    async promptConflictResolution(conflict) {
-        // Use raw mode for single keypress input
-        const validChoices = ['1', '2', 's', 'h'];
-        console.log(`\n🤔 How would you like to resolve this conflict?`.yellow.bold);
-        console.log('');
-        console.log('Available options:'.cyan);
-        console.log('  [1] Keep LOCAL version (overwrite server)');
-        console.log('  [2] Keep SERVER version (overwrite local)');
-        console.log('  [s] Skip for now (resolve later)');
-        console.log('  [h] Show help');
-        console.log('');
-        return new Promise((resolve) => {
-            const flushStdin = () => {
-                // Flush any buffered input after raw mode
-                while (process.stdin.read());
-            };
-            const restoreReadline = () => {
-                try {
-                    process.stdin.setRawMode(false);
-                } catch {}
-                process.stdin.resume();
-                if (this.rl && typeof this.rl.resume === 'function') this.rl.resume();
-                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
-            };
-            const onData = (buffer) => {
-                const choice = buffer.toString().trim();
-                if (!validChoices.includes(choice)) {
-                    process.stdout.write('\u001b[31mInvalid choice. Please enter 1, 2, s, or h\u001b[0m\n');
-                    return;
-                }
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdin.removeListener('data', onData);
-                if (choice === 'h') {
-                    this.showConflictHelp();
-                    process.stdin.setRawMode(true);
-                    process.stdin.resume();
-                    process.stdin.on('data', onData);
-                    return;
-                }
-                // Show immediate feedback for the user's choice
-                if (choice === '1') {
-                    console.log('✅ You chose to keep the LOCAL version (overwrite server).'.green);
-                } else if (choice === '2') {
-                    console.log('✅ You chose to keep the SERVER version (overwrite local).'.blue);
-                } else if (choice === 's') {
-                    console.log('⏸️  You chose to skip this conflict for now.'.yellow);
-                }
-                // Flush any buffered input before restoring prompt
-                flushStdin();
-                setTimeout(restoreReadline, 0);
-                resolve({
-                    type: choice === '1' ? 'local' : choice === '2' ? 'server' : 'skip',
-                    keepVersion: choice === '1' ? 'incoming' : choice === '2' ? 'existing' : undefined
-                });
-            };
-            process.stdin.setRawMode(true);
-            process.stdin.resume();
-            process.stdin.on('data', onData);
-        });
     }
 
     handleCommand(input) {
@@ -562,4 +487,3 @@ class CliInterface {
 }
 
 module.exports = CliInterface;
-

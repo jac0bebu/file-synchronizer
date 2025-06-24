@@ -110,7 +110,6 @@ class SyncManager {
 
     async uploadFile(filePath) {
         const fileName = path.basename(filePath);
-        
         try {
             if (this.pendingUploads.has(fileName)) {
                 console.log(`Upload already in progress for ${fileName}`.yellow);
@@ -135,7 +134,43 @@ class SyncManager {
             
         } catch (error) {
             if (error.conflict) {
+                // --- FIX: Read and store local content before any overwrite ---
+                let localContent = '';
+                let localStats = null;
+                try {
+                    localStats = await fs.stat(filePath);
+                    localContent = await fs.readFile(filePath, 'utf-8');
+                } catch {}
                 this.updateSyncStatus(fileName, 'conflict');
+                try {
+                    const serverFiles = await this.api.listFiles();
+                    const serverFile = serverFiles.find(f => (f.name || f.fileName) === fileName);
+                    if (serverFile) {
+                        if (this.fileWatcher && typeof this.fileWatcher.ignoreFile === 'function') {
+                            this.fileWatcher.ignoreFile(fileName);
+                        }
+                        console.log(`Conflict detected. Downloading latest server version of ${fileName}...`.yellow);
+                        await this.downloadFile(serverFile);
+                        await new Promise(res => setTimeout(res, 500));
+                        if (this.fileWatcher && typeof this.fileWatcher.unignoreFile === 'function') {
+                            this.fileWatcher.unignoreFile(fileName);
+                        }
+                        console.log(`Local file ${fileName} updated to latest server version after conflict.`.green);
+                        this.updateSyncStatus(fileName, 'synced', { 
+                            version: serverFile.version,
+                            lastSync: new Date().toISOString()
+                        });
+                    }
+                } catch (downloadErr) {
+                    console.error(`Failed to update local file after conflict:`, downloadErr.message);
+                }
+                // --- Store the original local content for preview ---
+                this.lastConflictLocalInfo = {
+                    fileName,
+                    size: localStats ? localStats.size : undefined,
+                    lastModified: localStats ? localStats.mtime.toISOString() : undefined,
+                    content: localContent
+                };
                 throw error; // Re-throw to be handled by caller
             } else {
                 console.error(`Upload failed for ${fileName}:`.red, error.message);
@@ -206,11 +241,6 @@ class SyncManager {
                 resolved: false
             });
             
-            // Prompt user for resolution
-            const resolution = await this.promptConflictResolution(fileName, localInfo, serverInfo);
-            
-            // Apply the chosen resolution
-            await this.applyConflictResolution(fileName, resolution, localInfo, serverInfo);
             
             // Clean up temporary files
             if (serverInfo && serverInfo.tempPath) {
@@ -233,14 +263,23 @@ class SyncManager {
         console.log('-'.repeat(60));
         
         // Local version
+        // --- FIX: If lastConflictLocalInfo matches, use it for preview ---
+        let displayLocal = localInfo;
+        if (
+            this.lastConflictLocalInfo &&
+            this.lastConflictLocalInfo.fileName === fileName &&
+            this.lastConflictLocalInfo.content
+        ) {
+            displayLocal = this.lastConflictLocalInfo;
+        }
         console.log('🏠 LOCAL VERSION:'.green.bold);
-        console.log(`   📏 Size: ${localInfo.size} bytes`);
-        console.log(`   📅 Modified: ${new Date(localInfo.lastModified).toLocaleString()}`);
+        console.log(`   📏 Size: ${displayLocal.size} bytes`);
+        console.log(`   📅 Modified: ${displayLocal.lastModified ? new Date(displayLocal.lastModified).toLocaleString() : 'unknown'}`);
         console.log(`   📝 Content Preview:`);
         console.log('   ' + '-'.repeat(40));
-        const localPreview = localInfo.content.length > 200 
-            ? localInfo.content.substring(0, 200) + '...' 
-            : localInfo.content;
+        const localPreview = displayLocal.content && displayLocal.content.length > 200 
+            ? displayLocal.content.substring(0, 200) + '...' 
+            : (displayLocal.content || '');
         console.log(`   ${localPreview.split('\n').join('\n   ')}`);
         console.log('   ' + '-'.repeat(40));
         
@@ -272,14 +311,23 @@ class SyncManager {
         console.log('-'.repeat(60));
         
         // Local version
+        // --- FIX: If lastConflictLocalInfo matches, use it for preview ---
+        let displayLocal = localInfo;
+        if (
+            this.lastConflictLocalInfo &&
+            this.lastConflictLocalInfo.fileName === fileName &&
+            this.lastConflictLocalInfo.content
+        ) {
+            displayLocal = this.lastConflictLocalInfo;
+        }
         console.log('🏠 LOCAL VERSION:'.green.bold);
-        console.log(`   📏 Size: ${localInfo.size} bytes`);
-        console.log(`   📅 Modified: ${new Date(localInfo.lastModified).toLocaleString()}`);
+        console.log(`   📏 Size: ${displayLocal.size} bytes`);
+        console.log(`   📅 Modified: ${displayLocal.lastModified ? new Date(displayLocal.lastModified).toLocaleString() : 'unknown'}`);
         console.log(`   📝 Content Preview:`);
         console.log('   ' + '-'.repeat(40));
-        const localPreview = localInfo.content.length > 200 
-            ? localInfo.content.substring(0, 200) + '...' 
-            : localInfo.content;
+        const localPreview = displayLocal.content && displayLocal.content.length > 200 
+            ? displayLocal.content.substring(0, 200) + '...' 
+            : (displayLocal.content || '');
         console.log(`   ${localPreview.split('\n').join('\n   ')}`);
         console.log('   ' + '-'.repeat(40));
         
@@ -305,69 +353,6 @@ class SyncManager {
         console.log('\n' + '='.repeat(60));
     }
 
-    // Prompt user for conflict resolution choice (single keypress, raw mode)
-    async promptConflictResolution(fileName, localInfo, serverInfo) {
-        const validChoices = ['1', '2', 's', 'h'];
-        if (serverInfo) {
-            validChoices.push('3', '4');
-        }
-
-        console.log(`\n🤔 How would you like to resolve this conflict?`.yellow.bold);
-        console.log('');
-        console.log('Available options:'.cyan);
-        console.log('  [1] Keep LOCAL version (overwrite server)');
-        console.log('  [2] Keep SERVER version (overwrite local)');
-        if (serverInfo) {
-            console.log('  [3] Show FULL content comparison');
-            console.log('  [4] Create MERGED version (manual edit)');
-        }
-        console.log('  [s] Skip for now (resolve later)');
-        console.log('  [h] Show help');
-        console.log('');
-
-        return new Promise((resolve) => {
-            const onData = async (buffer) => {
-                const choice = buffer.toString().trim();
-                if (!validChoices.includes(choice)) {
-                    process.stdout.write('\u001b[31mInvalid choice. Please enter 1, 2' + (serverInfo ? ', 3, 4' : '') + ', s, or h\u001b[0m\n');
-                    return;
-                }
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdin.removeListener('data', onData);
-
-                if (choice === '3' && serverInfo) {
-                    this.showFullComparison(localInfo, serverInfo);
-                    // Re-enable raw mode for next input
-                    process.stdin.setRawMode(true);
-                    process.stdin.resume();
-                    process.stdin.on('data', onData);
-                    return;
-                }
-                if (choice === '4' && serverInfo) {
-                    const mergedPath = await this.createMergedVersion(fileName, localInfo, serverInfo);
-                    resolve({ type: 'merge', path: mergedPath });
-                    return;
-                }
-                if (choice === 'h') {
-                    this.showConflictHelp();
-                    // Re-enable raw mode for next input
-                    process.stdin.setRawMode(true);
-                    process.stdin.resume();
-                    process.stdin.on('data', onData);
-                    return;
-                }
-                // 1, 2, s
-                resolve({
-                    type: choice === '1' ? 'local' : choice === '2' ? 'server' : 'skip',
-                    choice: choice
-                });
-            };
-            process.stdin.setRawMode(true);
-            process.stdin.resume();
-            process.stdin.on('data', onData);
-        });
-    }
 
     // Show full content comparison
     showFullComparison(localInfo, serverInfo) {
@@ -450,128 +435,6 @@ class SyncManager {
     }
     
 
-    // Show help for conflict resolution
-    showConflictHelp() {
-        console.log('\n' + '📚 CONFLICT RESOLUTION HELP'.cyan.bold);
-        console.log('='.repeat(50).cyan);
-        console.log('Option 1 - Keep LOCAL:'.green);
-        console.log('  - Keeps your local changes');
-        console.log('  - Uploads your version to server (creates new version)');
-        console.log('  - Other clients will get your version');
-        console.log('');
-        console.log('Option 2 - Keep SERVER:'.blue);
-        console.log('  - Downloads server version');
-        console.log('  - Overwrites your local file');
-        console.log('  - Your local changes will be lost');
-        console.log('');
-        console.log('Option 3 - Show FULL comparison:'.yellow);
-        console.log('  - Shows complete content of both versions');
-        console.log('  - Helpful for detailed comparison');
-        console.log('');
-        console.log('Option 4 - Create MERGED version:'.magenta);
-        console.log('  - Creates a file with both versions marked');
-        console.log('  - Opens in editor for manual merging');
-        console.log('  - You decide what to keep from each version');
-        console.log('');
-        console.log('Option S - Skip:'.gray);
-        console.log('  - Leaves conflict unresolved');
-        console.log('  - You can resolve it later');
-        console.log('  - File remains in conflict state');
-        console.log('='.repeat(50).cyan + '\n');
-    }
-
-    // Apply the chosen resolution
-    async applyConflictResolution(fileName, resolution, localInfo, serverInfo) {
-        try {
-            switch (resolution.type) {
-                case 'local':
-                    console.log(`\n✅ Keeping LOCAL version of ${fileName}`.green);
-                    
-                    // Force upload local version
-                    const uploadResult = await this.api.uploadChunkedFile(localInfo.localPath || path.join(this.syncFolder, fileName), this.clientId);
-                    
-                    console.log(`✅ Local version uploaded as version ${uploadResult.version}`.green);
-                    this.updateSyncStatus(fileName, 'synced', {
-                        version: uploadResult.version,
-                        resolvedConflict: true,
-                        resolution: 'kept-local',
-                        resolvedAt: new Date().toISOString()
-                    });
-                    break;
-                    
-                case 'server':
-                    console.log(`\n✅ Keeping SERVER version of ${fileName}`.blue);
-                    
-                    // Download server version
-                    if (serverInfo && serverInfo.tempPath) {
-                        const finalPath = path.join(this.syncFolder, fileName);
-                        await fs.copy(serverInfo.tempPath, finalPath);
-                        
-                        // Set timestamp to match server
-                        const serverTime = new Date(serverInfo.lastModified);
-                        await fs.utimes(finalPath, serverTime, serverTime);
-                        
-                        console.log(`✅ Server version downloaded and applied`.blue);
-                        this.updateSyncStatus(fileName, 'synced', {
-                            version: serverInfo.version,
-                            resolvedConflict: true,
-                            resolution: 'kept-server',
-                            resolvedAt: new Date().toISOString()
-                        });
-                    }
-                    break;
-                    
-                case 'merge':
-                    console.log(`\n✅ Applying MERGED version of ${fileName}`.magenta);
-                    
-                    // Move merged file to final location
-                    const finalPath = path.join(this.syncFolder, fileName);
-                    await fs.copy(resolution.path, finalPath);
-                    await fs.remove(resolution.path); // Clean up merged file
-                    
-                    // Upload the merged version
-                    const mergeResult = await this.api.uploadChunkedFile(finalPath, this.clientId);
-                    
-                    console.log(`✅ Merged version uploaded as version ${mergeResult.version}`.magenta);
-                    this.updateSyncStatus(fileName, 'synced', {
-                        version: mergeResult.version,
-                        resolvedConflict: true,
-                        resolution: 'merged',
-                        resolvedAt: new Date().toISOString()
-                    });
-                    break;
-                    
-                case 'skip':
-                    console.log(`\n⏸️  Conflict for ${fileName} left unresolved`.yellow);
-                    this.updateSyncStatus(fileName, 'conflict-pending', {
-                        resolution: 'skipped',
-                        skippedAt: new Date().toISOString()
-                    });
-                    return; // Don't mark as resolved
-            }
-            
-            // Mark conflict as resolved
-            if (this.pendingConflicts.has(fileName)) {
-                const conflict = this.pendingConflicts.get(fileName);
-                conflict.resolved = true;
-                conflict.resolvedAt = new Date();
-                conflict.resolution = resolution;
-                
-                // Move to history
-                this.conflictHistory.set(fileName, conflict);
-                this.pendingConflicts.delete(fileName);
-            }
-            
-        } catch (error) {
-            console.error(`Failed to apply resolution for ${fileName}:`.red, error.message);
-            this.updateSyncStatus(fileName, 'conflict-error', {
-                error: error.message,
-                failedAt: new Date().toISOString()
-            });
-            throw error;
-        }
-    }
-
     // Method to list pending conflicts
     listPendingConflicts() {
         console.log('\n📋 PENDING CONFLICTS'.yellow.bold);
@@ -606,11 +469,9 @@ class SyncManager {
         // Display the conflict again
         this.displayConflictVersions(fileName, conflict.localInfo, conflict.serverInfo);
         
-        // Prompt for resolution
-        const resolution = await this.promptConflictResolution(fileName, conflict.localInfo, conflict.serverInfo);
-        
+
+    
         // Apply resolution
-        await this.applyConflictResolution(fileName, resolution, conflict.localInfo, conflict.serverInfo);
     }
 
     async downloadFile(serverFile) {
@@ -754,98 +615,127 @@ class SyncManager {
     }
 
     async compareAndSync(localFiles, serverFiles, verbose = true) {
-        const serverFileMap = new Map();
-        serverFiles.forEach(file => serverFileMap.set(file.name || file.fileName, file));
-        
-        const localFileMap = new Map();
-        localFiles.forEach(file => localFileMap.set(file.name, file));
-        
-        let updatesFound = 0;
-        
-        // 1. Handle pending deletions FIRST
-        for (const fileName of this.pendingDeletions) {
-            if (serverFileMap.has(fileName)) {
-                if (verbose) console.log(`Deleting ${fileName} from server`.red);
-                
-                try {
-                    await this.api.deleteFile(fileName);
-                    console.log(`✅ File ${fileName} deleted from server`.green);
-                    this.markAsDeleted(fileName);
-                    updatesFound++;
-                } catch (error) {
-                    console.error(`Failed to delete ${fileName} from server:`.red, error.message);
-                }
-            } else {
+    const serverFileMap = new Map();
+    serverFiles.forEach(file => serverFileMap.set(file.name || file.fileName, file));
+
+    const localFileMap = new Map();
+    localFiles.forEach(file => localFileMap.set(file.name, file));
+
+    let updatesFound = 0;
+
+    // 1. Handle pending deletions
+    for (const fileName of this.pendingDeletions) {
+        if (serverFileMap.has(fileName)) {
+            if (verbose) console.log(`Deleting ${fileName} from server`.red);
+            try {
+                await this.api.deleteFile(fileName);
+                console.log(`✅ File ${fileName} deleted from server`.green);
                 this.markAsDeleted(fileName);
+                updatesFound++;
+            } catch (error) {
+                console.error(`Failed to delete ${fileName} from server:`.red, error.message);
             }
+        } else {
+            this.markAsDeleted(fileName);
         }
-        
-        // 2. Files to download (on server but not local)
-        for (const serverFile of serverFiles) {
-            const fileName = serverFile.name || serverFile.fileName;
-            
-            if (this.recentlyDeleted.has(fileName)) {
-                if (verbose) console.log(`Skipping recently deleted file: ${fileName}`.gray);
-                continue;
+    }
+
+    // 2. Files to download (on server but not local or server is newer)
+    for (const serverFile of serverFiles) {
+        const fileName = serverFile.name || serverFile.fileName;
+
+        if (this.recentlyDeleted.has(fileName)) {
+            if (verbose) console.log(`Skipping recently deleted file: ${fileName}`.gray);
+            continue;
+        }
+
+        if (!localFileMap.has(fileName)) {
+            if (verbose) console.log(`New server file: ${fileName}`.blue);
+            await this.downloadFile(serverFile);
+            updatesFound++;
+        } else {
+            const localFile = localFileMap.get(fileName);
+            const serverTime = new Date(serverFile.lastUpdated || serverFile.lastModified || 0);
+            const localTime = new Date(localFile.lastModified);
+
+            let shouldDownload = false;
+
+            try {
+    const localContent = await fs.readFile(localFile.path);
+    const localHash = require('crypto').createHash('md5').update(localContent).digest('hex');
+
+    if (serverFile.checksum && serverFile.checksum !== localHash) {
+        shouldDownload = true;
+    }
+} catch {
+    shouldDownload = true; // Missing file locally? Force download
+}
+
+            // Force overwrite if there's a conflict file
+            const baseName = fileName.replace(/\.[^/.]+$/, '');
+            const ext = fileName.split('.').pop();
+            // Change pattern to _conflicted_by_
+            const conflictPattern = new RegExp(`^${baseName}_conflicted_by_.+\\.${ext}$`);
+            const hasConflictFile = serverFiles.some(f => conflictPattern.test(f.name || f.fileName));
+
+            if (hasConflictFile) {
+                shouldDownload = true;
+                if (verbose) console.log(`Conflict detected for ${fileName} — forcing overwrite from server`.yellow);
             }
-            
-            if (!localFileMap.has(fileName)) {
-                if (verbose) console.log(`New server file: ${fileName}`.blue);
+
+            if (shouldDownload) {
+                if (verbose) console.log(`Overwriting local file with server version: ${fileName}`.cyan);
                 await this.downloadFile(serverFile);
                 updatesFound++;
-            } else {
-                const localFile = localFileMap.get(fileName);
-                const serverTime = new Date(serverFile.lastModified || 0);
-                const localTime = new Date(localFile.lastModified);
-                
-                const timeDifferenceMs = Math.abs(serverTime.getTime() - localTime.getTime());
-                const tolerance = 2000;
-                
-                if (timeDifferenceMs > tolerance && serverTime > localTime) {
-                    if (verbose) console.log(`Server has newer version of ${fileName}`.blue);
-                    await this.downloadFile(serverFile);
-                    updatesFound++;
-                }
             }
         }
-        
-        // 3. Handle local files not on server (SINGLE LOOP - no duplication)
-        for (const localFile of localFiles) {
-            if (
-                !serverFileMap.has(localFile.name) &&
-                !this.recentlyDeleted.has(localFile.name) &&
-                !this.pendingDeletions.has(localFile.name)
-            ) {
-                // Decide: Upload or Delete based on file age
-                const fileAge = Date.now() - new Date(localFile.lastModified).getTime();
-                const isNewFile = fileAge < 5000; // Less than 1 minute = new file
-
-                if (isNewFile) {
-                    // NEW FILE: Upload it
-                    if (verbose) console.log(`New local file to upload: ${localFile.name}`.green);
-                    try {
-                        await this.uploadFile(localFile.path);
-                        updatesFound++;
-                    } catch (error) {
-                        console.error(`Failed to upload ${localFile.name}:`.red, error.message);
-                    }
-                } else {
-                    // OLD FILE: Delete it (was deleted from server by another client)
-                    if (verbose) console.log(`File deleted from server by another client: ${localFile.name}`.red);
-                    try {
-                        await fs.remove(localFile.path);
-                        console.log(`🗑️ Removed local file: ${localFile.name}`.yellow);
-                        this.updateSyncStatus(localFile.name, 'deleted');
-                        updatesFound++;
-                    } catch (error) {
-                        console.error(`Failed to remove local file ${localFile.name}:`.red, error.message);
-                    }
-                }
-            }
-        }
-        
-        return updatesFound;
     }
+
+    // 3. Clean up temp conflict_server_ files
+    for (const localFile of localFiles) {
+        if (/^\.conflict_server_/.test(localFile.name)) {
+            try {
+                await fs.remove(localFile.path);
+                if (verbose) console.log(`Removed temp conflict file: ${localFile.name}`.gray);
+            } catch {}
+        }
+    }
+
+    // 4. Local files not on server (upload or delete)
+    for (const localFile of localFiles) {
+        if (
+            !serverFileMap.has(localFile.name) &&
+            !this.recentlyDeleted.has(localFile.name) &&
+            !this.pendingDeletions.has(localFile.name)
+        ) {
+            const fileAge = Date.now() - new Date(localFile.lastModified).getTime();
+            const isNewFile = fileAge < 5000;
+
+            if (isNewFile) {
+                if (verbose) console.log(`New local file to upload: ${localFile.name}`.green);
+                try {
+                    await this.uploadFile(localFile.path);
+                    updatesFound++;
+                } catch (error) {
+                    console.error(`Failed to upload ${localFile.name}:`.red, error.message);
+                }
+            } else {
+                if (verbose) console.log(`File deleted from server by another client: ${localFile.name}`.red);
+                try {
+                    await fs.remove(localFile.path);
+                    console.log(`🗑️ Removed local file: ${localFile.name}`.yellow);
+                    this.updateSyncStatus(localFile.name, 'deleted');
+                    updatesFound++;
+                } catch (error) {
+                    console.error(`Failed to remove local file ${localFile.name}:`.red, error.message);
+                }
+            }
+        }
+    }
+
+    return updatesFound;
+}
+
 
     updateSyncStatus(fileName, status, details = {}) {
         const currentStatus = this.fileSyncStatus.get(fileName) || {};
