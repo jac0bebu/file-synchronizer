@@ -491,26 +491,38 @@ class CliInterface {
     async showConflicts() {
     try {
         console.log('\n⚠️ Conflicts:'.yellow.bold);
-        const conflicts = await this.syncManager.api.getConflicts();
-        
+        const allConflicts = await this.syncManager.api.getConflicts();
+        const clientId = this.syncManager.clientId;
+        // Only show conflicts where this client is a loser (not winner) and there is exactly one loser (themselves)
+        const conflicts = (allConflicts || []).filter(conflict =>
+            Array.isArray(conflict.losers) &&
+            conflict.losers.length === 1 &&
+            conflict.losers[0].clientId === clientId
+        );
+
         if (conflicts.length === 0) {
             console.log('No conflicts found.'.green);
             return;
         }
-        
+
         conflicts.forEach(conflict => {
-            const status = conflict.status === 'resolved' ? 'RESOLVED'.green : 'UNRESOLVED'.red;
-            console.log(`- ${conflict.fileName} [${status}]`.white);
+            const timestamp = conflict.timestamp
+                ? new Date(conflict.timestamp).toLocaleString()
+                : '';
+            console.log(`- ${conflict.fileName}`.white);
             console.log(`  ID: ${conflict.id}`.gray);
+            if (timestamp) {
+                console.log(`  Time: ${timestamp}`.gray);
+            }
             console.log(`  Reason: ${conflict.reason}`.yellow);
-            
-            if (conflict.status === 'resolved' && conflict.resolution) {
+
+            if (conflict.resolution) {
                 console.log(`  Resolution: ${conflict.resolution.method}`.green);
                 console.log(`  Resolved by: ${conflict.resolution.resolvedBy}`.green);
                 console.log(`  Resolved at: ${new Date(conflict.resolvedAt).toLocaleString()}`.green);
             }
         });
-        
+
     } catch (error) {
         console.error('Failed to fetch conflicts:'.red, error.message);
     }
@@ -589,4 +601,5 @@ class CliInterface {
     }
 }
 
+module.exports = CliInterface;
 module.exports = CliInterface;
