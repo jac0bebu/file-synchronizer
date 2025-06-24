@@ -31,7 +31,9 @@ class MetadataStorage {
         // Check for conflicts
         const conflict = await this.detectConflict(metadata);
         if (conflict) {
-            await this.saveConflict(conflict);
+            await this.saveConflict(conflict); // Ensure conflict is saved
+            // Optionally: Save the conflicted file's metadata here if needed
+            // await this.saveMetadataForConflictedFile(metadata);
             throw new Error(`Conflict detected: ${conflict.reason}`);
         }
 
