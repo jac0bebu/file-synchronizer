@@ -54,44 +54,80 @@ class CliInterface {
 
     async resolveConflictById(args) {
         if (!args || args.length === 0) {
-            console.log('Usage: resolve <conflictId>'.yellow);
+            console.log('Usage: resolve <conflictId|filename>'.yellow);
             if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
             return;
         }
-        const conflictId = args[0];
+        let conflictId = args[0];
         try {
             // Fetch conflict details from server
             const conflicts = await this.syncManager.api.getConflicts();
-            const conflict = Array.isArray(conflicts)
+            let conflict = Array.isArray(conflicts)
                 ? conflicts.find(c => c.id === conflictId)
                 : null;
+
+            // If not found by ID, try by filename (latest unresolved)
             if (!conflict) {
-                console.log(`No conflict found with ID: ${conflictId}`.red);
+                const byFile = Array.isArray(conflicts)
+                    ? conflicts.filter(c => (c.fileName === conflictId || c.fileName === args[0]) && c.status !== 'resolved')
+                    : [];
+                if (byFile.length === 1) {
+                    conflict = byFile[0];
+                    conflictId = conflict.id;
+                    console.log(`Found unresolved conflict for "${args[0]}": ID ${conflictId}`.yellow);
+                } else if (byFile.length > 1) {
+                    console.log(`Multiple unresolved conflicts found for "${args[0]}":`.yellow);
+                    byFile.forEach((c, idx) => {
+                        console.log(`  [${idx + 1}] ID: ${c.id} | Reason: ${c.reason} | Time: ${c.timestamp}`);
+                    });
+                    await new Promise(resolve => {
+                        this.rl.question('Enter the number of the conflict to resolve: '.cyan, async (answer) => {
+                            const sel = parseInt(answer.trim(), 10);
+                            if (!isNaN(sel) && sel > 0 && sel <= byFile.length) {
+                                conflict = byFile[sel - 1];
+                                conflictId = conflict.id;
+                                resolve();
+                            } else {
+                                console.log('Invalid selection.'.red);
+                                conflict = null;
+                                resolve();
+                            }
+                        });
+                    });
+                    if (!conflict) {
+                        if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+                        return;
+                    }
+                }
+            }
+
+            if (!conflict) {
+                console.log(`No conflict found with ID or filename: ${args[0]}`.red);
                 if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
                 return;
             }
 
-            // Determine if current client is a loser (conflicted) or winner
+            // --- Only allow the correct client to resolve their conflict ---
             const clientId = this.syncManager.clientId;
-            let localMeta, localContent, serverMeta, serverContent;
-
-            // Winner info
             const winner = conflict.winner;
-            // Loser info for this client, if any
             const myLoser = (conflict.losers || []).find(l => l.clientId === clientId);
+
+            if (!myLoser && !(winner && winner.clientId === clientId)) {
+                console.log('This conflict does not belong to you. Only the involved client can resolve this conflict.'.red);
+                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+                return;
+            }
+
+            let localMeta, localContent, serverMeta, serverContent;
 
             if (myLoser) {
                 // This client is a loser (conflicted file)
                 localMeta = myLoser;
-                // Try to read content of the conflict file from local sync folder or downloads
                 const conflictFileName = myLoser.conflictFileName || myLoser.fileName;
-                let conflictPath = null;
-                // Try sync folder first
-                conflictPath = require('path').join(this.syncManager.syncFolder, conflictFileName);
+                let conflictPath = require('path').join(this.syncManager.syncFolder, conflictFileName);
                 try {
                     localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
                 } catch {
-                    // Try download folder
                     try {
                         conflictPath = require('path').join(this.downloadFolder, conflictFileName);
                         localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
@@ -100,7 +136,6 @@ class CliInterface {
                     }
                 }
                 serverMeta = winner;
-                // Download winner version to temp and read content
                 serverContent = '[content not available]';
                 if (winner && winner.fileName && winner.version && this.syncManager.api.downloadFileVersion) {
                     const os = require('os');
@@ -115,7 +150,6 @@ class CliInterface {
                 // This client is the winner
                 localMeta = winner;
                 serverMeta = winner;
-                // Try to read content from local file
                 let filePath = require('path').join(this.syncManager.syncFolder, winner.fileName);
                 try {
                     localContent = await require('fs-extra').readFile(filePath, 'utf-8');
@@ -124,13 +158,12 @@ class CliInterface {
                 }
                 serverContent = localContent;
             } else {
-                // Not involved, fallback to default display
+                // Not involved, fallback to default display (should not reach here)
                 await this.displayConflictDetails(conflict);
                 if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
                 return;
             }
 
-            // Compose a pseudo-conflict object for display
             const displayObj = {
                 fileName: conflict.fileName,
                 incoming: {
@@ -147,7 +180,6 @@ class CliInterface {
         } catch (error) {
             console.error('Error resolving conflict:'.red, error.message);
         }
-        // Always restore CLI prompt after conflict resolution
         if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
     }
 
