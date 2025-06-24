@@ -398,7 +398,7 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
         // Save each loser as a conflict file
         const loserMetas = [];
         for (const loser of losers) {
-            const conflictFileName = `${fileName.replace(/(\.[^\.]+)?$/, '')}_(conflicted by ${loser.clientId})${path.extname(fileName)}`;
+            const conflictFileName = `${fileName.replace(/(\.[^\.]+)?$/, '')}_conflicted_by_${loser.clientId}${path.extname(fileName)}`;
             const conflictVersion = await metadataStorage.getNextVersion(conflictFileName);
             await fileStorage.saveFile(conflictFileName, loser.buffer, conflictVersion);
             const loserMeta = await metadataStorage.saveMetadata({

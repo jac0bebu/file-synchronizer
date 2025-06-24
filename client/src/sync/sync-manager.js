@@ -674,7 +674,8 @@ class SyncManager {
             // Force overwrite if there's a conflict file
             const baseName = fileName.replace(/\.[^/.]+$/, '');
             const ext = fileName.split('.').pop();
-            const conflictPattern = new RegExp(`^${baseName}_\\(conflicted by .+\\)\\.${ext}$`);
+            // Change pattern to _conflicted_by_
+            const conflictPattern = new RegExp(`^${baseName}_conflicted_by_.+\\.${ext}$`);
             const hasConflictFile = serverFiles.some(f => conflictPattern.test(f.name || f.fileName));
 
             if (hasConflictFile) {
