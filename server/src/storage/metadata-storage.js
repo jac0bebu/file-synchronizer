@@ -94,8 +94,11 @@ class MetadataStorage {
     async saveConflict(conflict) {
         await this.initPromise;
         const conflicts = await fs.readJson(this.conflictsFile);
-        conflicts.push(conflict);
-        await fs.writeJson(this.conflictsFile, conflicts, { spaces: 2 });
+        // Prevent duplicate conflict id
+        if (!conflicts.some(c => c.id === conflict.id)) {
+            conflicts.push(conflict);
+            await fs.writeJson(this.conflictsFile, conflicts, { spaces: 2 });
+        }
     }
 
     async getConflicts() {
