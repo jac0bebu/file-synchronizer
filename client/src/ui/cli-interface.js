@@ -70,9 +70,80 @@ class CliInterface {
                 if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
                 return;
             }
-            // Display both versions
-            await this.displayConflictDetails(conflict);
-            // No prompt for resolution, just display details
+
+            // Determine if current client is a loser (conflicted) or winner
+            const clientId = this.syncManager.clientId;
+            let localMeta, localContent, serverMeta, serverContent;
+
+            // Winner info
+            const winner = conflict.winner;
+            // Loser info for this client, if any
+            const myLoser = (conflict.losers || []).find(l => l.clientId === clientId);
+
+            if (myLoser) {
+                // This client is a loser (conflicted file)
+                localMeta = myLoser;
+                // Try to read content of the conflict file from local sync folder or downloads
+                const conflictFileName = myLoser.conflictFileName || myLoser.fileName;
+                let conflictPath = null;
+                // Try sync folder first
+                conflictPath = require('path').join(this.syncManager.syncFolder, conflictFileName);
+                try {
+                    localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
+                } catch {
+                    // Try download folder
+                    try {
+                        conflictPath = require('path').join(this.downloadFolder, conflictFileName);
+                        localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
+                    } catch {
+                        localContent = '[content not available]';
+                    }
+                }
+                serverMeta = winner;
+                // Download winner version to temp and read content
+                serverContent = '[content not available]';
+                if (winner && winner.fileName && winner.version && this.syncManager.api.downloadFileVersion) {
+                    const os = require('os');
+                    const tempPath = require('path').join(os.tmpdir(), `conflict-server-${winner.fileName}.v${winner.version}`);
+                    try {
+                        await this.syncManager.api.downloadFileVersion(winner.fileName, winner.version, tempPath);
+                        serverContent = await require('fs-extra').readFile(tempPath, 'utf-8');
+                        await require('fs-extra').remove(tempPath);
+                    } catch {}
+                }
+            } else if (winner && winner.clientId === clientId) {
+                // This client is the winner
+                localMeta = winner;
+                serverMeta = winner;
+                // Try to read content from local file
+                let filePath = require('path').join(this.syncManager.syncFolder, winner.fileName);
+                try {
+                    localContent = await require('fs-extra').readFile(filePath, 'utf-8');
+                } catch {
+                    localContent = '[content not available]';
+                }
+                serverContent = localContent;
+            } else {
+                // Not involved, fallback to default display
+                await this.displayConflictDetails(conflict);
+                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+                return;
+            }
+
+            // Compose a pseudo-conflict object for display
+            const displayObj = {
+                fileName: conflict.fileName,
+                incoming: {
+                    ...localMeta,
+                    content: localContent
+                },
+                existing: {
+                    ...serverMeta,
+                    content: serverContent
+                }
+            };
+            await this.displayConflictDetails(displayObj);
+
         } catch (error) {
             console.error('Error resolving conflict:'.red, error.message);
         }
