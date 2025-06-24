@@ -108,7 +108,8 @@ sync>
 | `help` | Show available commands | `help` |
 | `quit` | Exit the application | `quit` |
 | `download` | Download File | `download-version <filename> <version>` |
-| `rename` | Rename a file (does not change version, does not create a new version) | `rename <oldName> <newName>` |
+| `rename` | Rename a file | `rename <oldName> <newName>` |
+| `resolve` | View a specific conflict's information | `resolve` <conflictID> |
 
 ## 🔄 How It Works
 
