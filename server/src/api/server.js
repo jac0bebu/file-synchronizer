@@ -294,18 +294,21 @@ app.post('/conflicts/:conflictId/resolve', async (req, res) => {
     }
 });
 
-// Upload with conflict detection
+// Add a simple in-memory map to track recent uploads within the sync interval
+const recentUploads = new Map();
+const SYNC_INTERVAL_MS = 10000; // 10 seconds
+
+// Upload with conflict detection (overwrite this endpoint)
 app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
     try {
         const { fileName, clientId, lastModified } = req.body;
-        
         if (!req.file || !fileName || !clientId) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
-        
         const fileBuffer = req.file.buffer;
         const checksum = require('crypto').createHash('md5').update(fileBuffer).digest('hex');
-        
+        const now = Date.now();
+
         // Prepare metadata for conflict detection
         const metadata = {
             fileId: require('crypto').randomBytes(8).toString('hex'),
@@ -315,41 +318,144 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
             size: fileBuffer.length,
             checksum
         };
-        
-        try {
-            // Get next version
-            const nextVersion = await metadataStorage.getNextVersion(fileName);
-            metadata.version = nextVersion;
-            
-            // Save with conflict detection
-            const saveResult = await fileStorage.saveFile(fileName, fileBuffer, nextVersion);
-            const savedMetadata = await metadataStorage.saveMetadata({
-                ...metadata,
-                size: saveResult.size,
-                checksum: saveResult.checksum
-            });
-            
-            res.json({
-                success: true,
-                message: 'File uploaded successfully',
-                version: nextVersion,
-                metadata: savedMetadata
-            });
-            
-        } catch (conflictError) {
-            // Handle conflict
-            if (conflictError.message.includes('Conflict detected')) {
-                res.status(409).json({
-                    success: false,
-                    error: 'Conflict detected',
-                    message: conflictError.message,
-                    action: 'resolve_conflict'
-                });
-            } else {
-                throw conflictError;
+
+        // Check for recent upload from another client within the sync interval
+        let conflictDetected = false;
+        let winner = null, loser = null, winnerContent = null, loserContent = null, winnerClient = null, loserClient = null;
+        let winnerLastModified = null, loserLastModified = null;
+
+        // Clean up old entries
+        for (const [key, value] of recentUploads.entries()) {
+            if (now - value.timestamp > SYNC_INTERVAL_MS) {
+                recentUploads.delete(key);
             }
         }
-        
+
+        // Key by fileName
+        const key = fileName;
+        if (recentUploads.has(key)) {
+            // There was a recent upload for this file
+            const prev = recentUploads.get(key);
+            // Compare timestamps
+            const prevTime = new Date(prev.lastModified).getTime();
+            const currTime = new Date(lastModified).getTime();
+            if (prev.clientId !== clientId && prev.checksum !== checksum) {
+                // Conflict detected
+                conflictDetected = true;
+                if (prevTime <= currTime) {
+                    // Previous upload wins (earlier timestamp)
+                    winner = prev;
+                    loser = { ...metadata, buffer: fileBuffer };
+                    winnerContent = prev.buffer;
+                    loserContent = fileBuffer;
+                    winnerClient = prev.clientId;
+                    loserClient = clientId;
+                    winnerLastModified = prev.lastModified;
+                    loserLastModified = lastModified;
+                } else {
+                    // Current upload wins
+                    winner = { ...metadata, buffer: fileBuffer };
+                    loser = prev;
+                    winnerContent = fileBuffer;
+                    loserContent = prev.buffer;
+                    winnerClient = clientId;
+                    loserClient = prev.clientId;
+                    winnerLastModified = lastModified;
+                    loserLastModified = prev.lastModified;
+                }
+            }
+        }
+
+        if (conflictDetected) {
+            // Save the winner as the main file (new version)
+            const nextVersion = await metadataStorage.getNextVersion(fileName);
+            await fileStorage.saveFile(fileName, winnerContent, nextVersion);
+            await metadataStorage.saveMetadata({
+                fileId: winner.fileId,
+                fileName,
+                version: nextVersion,
+                size: winner.size,
+                checksum: require('crypto').createHash('md5').update(winnerContent).digest('hex'),
+                clientId: winnerClient,
+                lastModified: winnerLastModified,
+                lastUpdated: new Date().toISOString() // Mark as updated now
+            });
+
+            // Save the loser as a conflict file
+            const conflictFileName = `${fileName.replace(/(\.[^\.]+)?$/, '')}_(conflicted by ${loserClient})${path.extname(fileName)}`;
+            const conflictVersion = await metadataStorage.getNextVersion(conflictFileName);
+            await fileStorage.saveFile(conflictFileName, loserContent, conflictVersion);
+            await metadataStorage.saveMetadata({
+                fileId: loser.fileId,
+                fileName: conflictFileName,
+                version: conflictVersion,
+                size: loser.size,
+                checksum: require('crypto').createHash('md5').update(loserContent).digest('hex'),
+                clientId: loserClient,
+                lastModified: loserLastModified,
+                conflict: true,
+                conflictedWith: fileName
+            });
+
+            // Update recentUploads for both
+            recentUploads.set(key, {
+                ...winner,
+                buffer: winnerContent,
+                timestamp: now
+            });
+            recentUploads.set(conflictFileName, {
+                ...loser,
+                buffer: loserContent,
+                timestamp: now
+            });
+
+            // Notify the loser client of the conflict
+            res.status(409).json({
+                success: false,
+                error: 'Conflict detected',
+                message: `Conflict detected: "${fileName}" was modified by another client at nearly the same time. The version from "${winnerClient}" (saved at ${winnerLastModified}) was kept. Your version was saved as "${conflictFileName}".`,
+                conflict: {
+                    fileName,
+                    winner: {
+                        clientId: winnerClient,
+                        lastModified: winnerLastModified
+                    },
+                    loser: {
+                        clientId: loserClient,
+                        lastModified: loserLastModified
+                    },
+                    conflictFileName
+                },
+                action: 'resolve_conflict'
+            });
+            return;
+        }
+
+        // No conflict, save as normal
+        const nextVersion = await metadataStorage.getNextVersion(fileName);
+        metadata.version = nextVersion;
+        const saveResult = await fileStorage.saveFile(fileName, fileBuffer, nextVersion);
+        const savedMetadata = await metadataStorage.saveMetadata({
+            ...metadata,
+            size: saveResult.size,
+            checksum: saveResult.checksum,
+            lastUpdated: new Date().toISOString() // Always update lastUpdated
+        });
+
+        // Track this upload for future conflict detection
+        recentUploads.set(key, {
+            ...metadata,
+            buffer: fileBuffer,
+            timestamp: now
+        });
+
+        res.json({
+            success: true,
+            message: 'File uploaded successfully',
+            version: nextVersion,
+            metadata: savedMetadata
+        });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
