@@ -4,7 +4,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const crypto = require('crypto');
 
-const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB, matches server limit
 
 async function uploadFileInChunks(filePath, serverUrl) {
     try {

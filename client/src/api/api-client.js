@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs-extra');
 const FormData = require('form-data');
 const path = require('path');
+const crypto = require('crypto'); // Add at the top if not present
 
 class ApiClient {
     constructor(serverUrl) {
@@ -65,9 +66,51 @@ class ApiClient {
     }
 
     async uploadChunkedFile(filePath, clientId) {
-        // This would use the upload-chunks.js logic
-        // For simplicity, we'll use the direct method for now
-        return this.uploadFile(filePath, clientId);
+        const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+        const fileName = path.basename(filePath);
+        const stats = await fs.stat(filePath);
+        const totalSize = stats.size;
+        const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+        const fileId = crypto.randomBytes(8).toString('hex');
+        const lastModified = stats.mtime.toISOString();
+
+        const fileStream = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE });
+        let chunkNumber = 0;
+        let uploadedChunks = 0;
+
+        for await (const chunk of fileStream) {
+            chunkNumber++;
+            const form = new FormData();
+            form.append('chunk', chunk, { filename: `${fileName}.part${chunkNumber}` });
+            form.append('fileId', fileId);
+            form.append('chunkNumber', chunkNumber);
+            form.append('totalChunks', totalChunks);
+            form.append('fileName', fileName);
+            form.append('clientId', clientId || 'default-client');
+            form.append('lastModified', lastModified);
+
+            try {
+                const response = await axios.post(
+                    `${this.serverUrl}/files/chunk`,
+                    form,
+                    {
+                        headers: form.getHeaders(),
+                        maxContentLength: Infinity,
+                        maxBodyLength: Infinity
+                    }
+                );
+                uploadedChunks++;
+                // Optionally, show progress here
+            } catch (error) {
+                throw new Error(`Chunk upload failed at chunk ${chunkNumber}: ${error.message}`);
+            }
+        }
+
+        if (uploadedChunks === totalChunks) {
+            return { success: true, message: 'All chunks uploaded', fileId, fileName };
+        } else {
+            throw new Error('Not all chunks uploaded');
+        }
     }
 
     async downloadFile(fileName, destinationPath) {

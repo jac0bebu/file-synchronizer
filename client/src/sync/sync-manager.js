@@ -115,23 +115,35 @@ class SyncManager {
                 console.log(`Upload already in progress for ${fileName}`.yellow);
                 return;
             }
-            
+
             this.pendingUploads.set(fileName, filePath);
             this.updateSyncStatus(fileName, 'uploading');
-            
+
             const stats = await fs.stat(filePath);
             const fileSize = stats.size;
-            
+            const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+
             console.log(`Uploading ${fileName} (${fileSize} bytes)`.cyan);
-            
-            const result = await this.api.uploadFile(filePath, this.clientId);
-            
-            console.log(`Successfully uploaded ${fileName} (version ${result.version})`.green);
-            this.updateSyncStatus(fileName, 'synced', { 
-                version: result.version,
-                lastSync: new Date().toISOString()
-            });
-            
+
+            let result;
+            if (fileSize > CHUNK_SIZE) {
+                // Alert user in CLI about chunked upload
+                console.log(`⚠️  File "${fileName}" is larger than 10MB. Using chunked upload...`.yellow.bold);
+                result = await this.api.uploadChunkedFile(filePath, this.clientId);
+                console.log(`Successfully uploaded all chunks for ${fileName}`.green);
+                this.updateSyncStatus(fileName, 'synced', { 
+                    lastSync: new Date().toISOString()
+                });
+            } else {
+                // Use normal upload for small files
+                result = await this.api.uploadFile(filePath, this.clientId);
+                console.log(`Successfully uploaded ${fileName} (version ${result.version})`.green);
+                this.updateSyncStatus(fileName, 'synced', { 
+                    version: result.version,
+                    lastSync: new Date().toISOString()
+                });
+            }
+
         } catch (error) {
             if (error.conflict) {
                 // --- FIX: Read and store local content before any overwrite ---

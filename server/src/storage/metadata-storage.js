@@ -47,7 +47,8 @@ class MetadataStorage {
             size: metadata.size || 0,
             checksum: metadata.checksum || null,
             clientId: metadata.clientId || 'unknown',
-            lastModified: metadata.lastModified || now
+            lastModified: metadata.lastModified || now,
+            chunks: metadata.chunks || null //
         };
 
         const existingIndex = allData.findIndex(item => 

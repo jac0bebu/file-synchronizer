@@ -24,7 +24,13 @@ app.use(express.urlencoded({ extended: true }));
 // Configure multer for file uploads (memory storage)
 const upload = multer({ 
     storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+    limits: { fileSize: 50 * 1024 * 1024 } // 10MB limit
+});
+
+// Configure multer for file uploads (disk storage)
+const uploadDisk = multer({
+  dest: 'uploads/',
+  limits: { fileSize: 100 * 1024 * 1024 } // 100 MB
 });
 
 // Health check endpoint
@@ -106,7 +112,14 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
             // Assemble the file
             const fileBuffers = [];
             for (let i = 1; i <= Number(totalChunks); i++) {
-                const part = await fs.readFile(path.join(chunkDir, `${fileId}_${i}`));
+                const chunkPath = path.join(chunkDir, `${fileId}_${i}`);
+                if (!(await fs.pathExists(chunkPath))) {
+                    throw new Error(`Missing chunk file: ${chunkPath}`);
+                }
+                const part = await fs.readFile(chunkPath);
+                if (!part || part.length === 0) {
+                    throw new Error(`Corrupt or empty chunk: ${chunkPath}`);
+                }
                 fileBuffers.push(part);
             }
             const completeBuffer = Buffer.concat(fileBuffers);
@@ -119,15 +132,30 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                 const saveResult = await fileStorage.saveFile(fileName, completeBuffer, nextVersion);
                 
                 // Save metadata with conflict detection
-                await metadataStorage.saveMetadata({
-                    fileId,
-                    fileName,
-                    version: nextVersion,
-                    size: saveResult.size,
-                    checksum: saveResult.checksum,
-                    clientId: clientId || 'unknown',
-                    lastModified: lastModified || new Date().toISOString()
-                });
+                try {
+                    await metadataStorage.saveMetadata({
+                        fileId,
+                        fileName,
+                        version: nextVersion,
+                        size: saveResult.size,
+                        checksum: saveResult.checksum,
+                        clientId: clientId || 'unknown',
+                        lastModified: lastModified || new Date().toISOString()
+                    });
+                } catch (conflictError) {
+                    if (conflictError.message.includes('Conflict detected')) {
+                        return res.status(409).json({
+                            success: false,
+                            error: 'Conflict detected',
+                            message: conflictError.message,
+                            action: 'resolve_conflict'
+                        });
+                    } else {
+                        // Log and return a 500 for other errors
+                        console.error('Metadata save error:', conflictError);
+                        return res.status(500).json({ error: conflictError.message });
+                    }
+                }
 
                 // Clean up chunks
                 for (let i = 1; i <= Number(totalChunks); i++) {
@@ -156,6 +184,7 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
             res.json({ success: true, message: `Chunk ${chunkNumber} uploaded.` });
         }
     } catch (error) {
+        console.error('Chunk upload error:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -605,3 +634,12 @@ app.listen(port, '0.0.0.0', () => {
 });
 
 module.exports = app;
+
+app.post('/upload', upload.single('file'), (req, res) => {
+  res.send('File uploaded!');
+}, (err, req, res, next) => {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).send('File too large');
+  }
+  next(err);
+});
