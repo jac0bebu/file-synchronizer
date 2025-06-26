@@ -342,9 +342,6 @@ class CliInterface {
                 if (file.version) {
                     console.log(`  Latest Version: ${file.version}`.cyan);
                 }
-                if (file.totalVersions && file.totalVersions > 1) {
-                    console.log(`  Total Versions: ${file.totalVersions}`.gray);
-                }
             });
             
         } catch (error) {
