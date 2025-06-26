@@ -627,138 +627,134 @@ class SyncManager {
     }
 
     async compareAndSync(localFiles, serverFiles, verbose = true) {
-    const serverFileMap = new Map();
-    serverFiles.forEach(file => serverFileMap.set(file.name || file.fileName, file));
+        const serverFileMap = new Map();
+        serverFiles.forEach(file => serverFileMap.set(file.name || file.fileName, file));
 
-    const localFileMap = new Map();
-    localFiles.forEach(file => localFileMap.set(file.name, file));
+        const localFileMap = new Map();
+        localFiles.forEach(file => localFileMap.set(file.name, file));
 
-    let updatesFound = 0;
+        let updatesFound = 0;
 
-    // 1. Handle pending deletions
-    for (const fileName of this.pendingDeletions) {
-        if (serverFileMap.has(fileName)) {
-            if (verbose) console.log(`Deleting ${fileName} from server`.red);
-            try {
-                await this.api.deleteFile(fileName);
-                console.log(`✅ File ${fileName} deleted from server`.green);
-                this.markAsDeleted(fileName);
-                updatesFound++;
-            } catch (error) {
-                console.error(`Failed to delete ${fileName} from server:`.red, error.message);
-            }
-        } else {
-            this.markAsDeleted(fileName);
-        }
-    }
-
-    // 2. Files to download (on server but not local or server is newer)
-    for (const serverFile of serverFiles) {
-        const fileName = serverFile.name || serverFile.fileName;
-
-        if (this.recentlyDeleted.has(fileName)) {
-            if (verbose) console.log(`Skipping recently deleted file: ${fileName}`.gray);
-            continue;
-        }
-
-        if (!localFileMap.has(fileName)) {
-            if (verbose) console.log(`New server file: ${fileName}`.blue);
-            await this.downloadFile(serverFile);
-            updatesFound++;
-        } else {
-            const localFile = localFileMap.get(fileName);
-            const serverTime = new Date(serverFile.lastUpdated || serverFile.lastModified || 0);
-            const localTime = new Date(localFile.lastModified);
-
-            let shouldDownload = false;
-
-            // --- FIX: Always prefer server version if server version is newer or checksum differs ---
-            const serverVersion = typeof serverFile.version !== 'undefined' ? Number(serverFile.version) : undefined;
-            const localVersion = typeof localFile.version !== 'undefined' ? Number(localFile.version) : undefined;
-
-            if (
-                typeof serverVersion !== 'undefined' &&
-                (typeof localVersion === 'undefined' || serverVersion > localVersion)
-            ) {
-                shouldDownload = true;
-            } else if (serverTime > localTime) {
-                shouldDownload = true;
-            } else {
+        // 1. Handle pending deletions
+        for (const fileName of this.pendingDeletions) {
+            if (serverFileMap.has(fileName)) {
+                if (verbose) console.log(`Deleting ${fileName} from server`.red);
                 try {
-                    const localContent = await fs.readFile(localFile.path);
-                    const localHash = require('crypto').createHash('md5').update(localContent).digest('hex');
-                    if (serverFile.checksum && serverFile.checksum !== localHash) {
-                        shouldDownload = true;
-                    }
-                } catch {
-                    shouldDownload = true; // Missing file locally? Force download
+                    await this.api.deleteFile(fileName);
+                    console.log(`✅ File ${fileName} deleted from server`.green);
+                    this.markAsDeleted(fileName);
+                    updatesFound++;
+                } catch (error) {
+                    console.error(`Failed to delete ${fileName} from server:`.red, error.message);
                 }
+            } else {
+                this.markAsDeleted(fileName);
+            }
+        }
+
+        // 2. Files to download (on server but not local or server is newer)
+        for (const serverFile of serverFiles) {
+            const fileName = serverFile.name || serverFile.fileName;
+
+            if (this.recentlyDeleted.has(fileName)) {
+                if (verbose) console.log(`Skipping recently deleted file: ${fileName}`.gray);
+                continue;
             }
 
-            // Force overwrite if there's a conflict file
-            const baseName = fileName.replace(/\.[^/.]+$/, '');
-            const ext = fileName.split('.').pop();
-            // Change pattern to _conflicted_by_
-            const conflictPattern = new RegExp(`^${baseName}_conflicted_by_.+\\.${ext}$`);
-            const hasConflictFile = serverFiles.some(f => conflictPattern.test(f.name || f.fileName));
+            const localFile = localFileMap.get(fileName);
 
-            if (hasConflictFile) {
-                shouldDownload = true;
-                if (verbose) console.log(`Conflict detected for ${fileName} — forcing overwrite from server`.yellow);
-            }
-
-            if (shouldDownload) {
-                if (verbose) console.log(`Overwriting local file with server version: ${fileName}`.cyan);
+            if (!localFile) {
+                // File does not exist locally, download it
+                if (verbose) console.log(`New server file: ${fileName}`.blue);
                 await this.downloadFile(serverFile);
                 updatesFound++;
+            } else {
+                // File exists locally, check if update is needed
+                let shouldDownload = false;
+
+                // Compare version if available
+                const serverVersion = typeof serverFile.version !== 'undefined' ? Number(serverFile.version) : undefined;
+                const localVersion = typeof localFile.version !== 'undefined' ? Number(localFile.version) : undefined;
+
+                if (
+                    typeof serverVersion !== 'undefined' &&
+                    typeof localVersion !== 'undefined' &&
+                    serverVersion > localVersion
+                ) {
+                    shouldDownload = true;
+                } else if (serverFile.checksum) {
+                    // Compare checksum if available
+                    try {
+                        const localContent = await fs.readFile(localFile.path);
+                        const localHash = require('crypto').createHash('md5').update(localContent).digest('hex');
+                        if (serverFile.checksum !== localHash) {
+                            shouldDownload = true;
+                        }
+                    } catch {
+                        shouldDownload = true; // Missing file locally? Force download
+                    }
+                } else {
+                    // Fallback: compare lastModified
+                    const serverTime = new Date(serverFile.lastUpdated || serverFile.lastModified || 0);
+                    const localTime = new Date(localFile.lastModified);
+                    if (serverTime > localTime) {
+                        shouldDownload = true;
+                    }
+                }
+
+                // Only download if file is actually different
+                if (shouldDownload) {
+                    if (verbose) console.log(`Overwriting local file with server version: ${fileName}`.cyan);
+                    await this.downloadFile(serverFile);
+                    updatesFound++;
+                }
             }
         }
-    }
 
-    // 3. Clean up temp conflict_server_ files
-    for (const localFile of localFiles) {
-        if (/^\.conflict_server_/.test(localFile.name)) {
-            try {
-                await fs.remove(localFile.path);
-                if (verbose) console.log(`Removed temp conflict file: ${localFile.name}`.gray);
-            } catch {}
-        }
-    }
-
-    // 4. Local files not on server (upload or delete)
-    for (const localFile of localFiles) {
-        if (
-            !serverFileMap.has(localFile.name) &&
-            !this.recentlyDeleted.has(localFile.name) &&
-            !this.pendingDeletions.has(localFile.name)
-        ) {
-            const fileAge = Date.now() - new Date(localFile.lastModified).getTime();
-            const isNewFile = fileAge < 5000;
-
-            if (isNewFile) {
-                if (verbose) console.log(`New local file to upload: ${localFile.name}`.green);
-                try {
-                    await this.uploadFile(localFile.path);
-                    updatesFound++;
-                } catch (error) {
-                    console.error(`Failed to upload ${localFile.name}:`.red, error.message);
-                }
-            } else {
-                if (verbose) console.log(`File deleted from server by another client: ${localFile.name}`.red);
+        // 3. Clean up temp conflict_server_ files
+        for (const localFile of localFiles) {
+            if (/^\.conflict_server_/.test(localFile.name)) {
                 try {
                     await fs.remove(localFile.path);
-                    console.log(`🗑️ Removed local file: ${localFile.name}`.yellow);
-                    this.updateSyncStatus(localFile.name, 'deleted');
-                    updatesFound++;
-                } catch (error) {
-                    console.error(`Failed to remove local file ${localFile.name}:`.red, error.message);
+                    if (verbose) console.log(`Removed temp conflict file: ${localFile.name}`.gray);
+                } catch {}
+            }
+        }
+
+        // 4. Local files not on server (upload or delete)
+        for (const localFile of localFiles) {
+            if (
+                !serverFileMap.has(localFile.name) &&
+                !this.recentlyDeleted.has(localFile.name) &&
+                !this.pendingDeletions.has(localFile.name)
+            ) {
+                const fileAge = Date.now() - new Date(localFile.lastModified).getTime();
+                const isNewFile = fileAge < 5000;
+
+                if (isNewFile) {
+                    if (verbose) console.log(`New local file to upload: ${localFile.name}`.green);
+                    try {
+                        await this.uploadFile(localFile.path);
+                        updatesFound++;
+                    } catch (error) {
+                        console.error(`Failed to upload ${localFile.name}:`.red, error.message);
+                    }
+                } else {
+                    if (verbose) console.log(`File deleted from server by another client: ${localFile.name}`.red);
+                    try {
+                        await fs.remove(localFile.path);
+                        console.log(`🗑️ Removed local file: ${localFile.name}`.yellow);
+                        this.updateSyncStatus(localFile.name, 'deleted');
+                        updatesFound++;
+                    } catch (error) {
+                        console.error(`Failed to remove local file ${localFile.name}:`.red, error.message);
+                    }
                 }
             }
         }
-    }
 
-    return updatesFound;
-}
+        return updatesFound;
+    }
 
 
     updateSyncStatus(fileName, status, details = {}) {
