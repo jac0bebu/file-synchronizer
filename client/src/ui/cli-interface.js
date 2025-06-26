@@ -65,24 +65,29 @@ class CliInterface {
         let conflictId = args[0];
         try {
             // Fetch conflict details from server
-            const conflicts = await this.syncManager.api.getConflicts();
-            let conflict = Array.isArray(conflicts)
-                ? conflicts.find(c => c.id === conflictId)
-                : null;
+            const allConflicts = await this.syncManager.api.getConflicts();
+            const clientId = this.syncManager.clientId;
+            // Only consider conflicts of this client (as loser, single loser)
+            const myConflicts = (allConflicts || []).filter(conflict =>
+                Array.isArray(conflict.losers) &&
+                conflict.losers.length === 1 &&
+                conflict.losers[0].clientId === clientId
+            );
 
-            // If not found by ID, try by filename (latest unresolved)
+            let conflict = myConflicts.find(c => c.id === conflictId);
+
+            // If not found by ID, try by filename (latest)
             if (!conflict) {
-                const byFile = Array.isArray(conflicts)
-                    ? conflicts.filter(c => (c.fileName === conflictId || c.fileName === args[0]) && c.status !== 'resolved')
-                    : [];
+                const byFile = myConflicts.filter(c => (c.fileName === conflictId || c.fileName === args[0]));
                 if (byFile.length === 1) {
                     conflict = byFile[0];
                     conflictId = conflict.id;
-                    console.log(`Found unresolved conflict for "${args[0]}": ID ${conflictId}`.yellow);
+                    console.log(`Found conflict for "${args[0]}": ID ${conflictId}`.yellow);
                 } else if (byFile.length > 1) {
-                    console.log(`Multiple unresolved conflicts found for "${args[0]}":`.yellow);
+                    console.log(`Multiple conflicts found for "${args[0]}":`.yellow);
                     byFile.forEach((c, idx) => {
-                        console.log(`  [${idx + 1}] ID: ${c.id} | Reason: ${c.reason} | Time: ${c.timestamp}`);
+                        const timestamp = c.timestamp ? new Date(c.timestamp).toLocaleString() : '';
+                        console.log(`  [${idx + 1}] ID: ${c.id} | Reason: ${c.reason} | Time: ${timestamp}`);
                     });
                     await new Promise(resolve => {
                         this.rl.question('Enter the number of the conflict to resolve: '.cyan, async (answer) => {
@@ -111,61 +116,35 @@ class CliInterface {
                 return;
             }
 
-            // --- Only allow the correct client to resolve their conflict ---
-            const clientId = this.syncManager.clientId;
-            const winner = conflict.winner;
-            const myLoser = (conflict.losers || []).find(l => l.clientId === clientId);
-
-            if (!myLoser && !(winner && winner.clientId === clientId)) {
-                console.log('This conflict does not belong to you. Only the involved client can resolve this conflict.'.red);
-                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
-                return;
-            }
-
+            // Always allow the client to resolve their own conflict (no need to check winner/loser logic)
             let localMeta, localContent, serverMeta, serverContent;
+            const myLoser = (conflict.losers || [])[0];
+            const winner = conflict.winner;
 
-            if (myLoser) {
-                // This client is a loser (conflicted file)
-                localMeta = myLoser;
-                const conflictFileName = myLoser.conflictFileName || myLoser.fileName;
-                let conflictPath = require('path').join(this.syncManager.syncFolder, conflictFileName);
+            // This client is always the loser in their own conflict
+            localMeta = myLoser;
+            const conflictFileName = myLoser.conflictFileName || myLoser.fileName;
+            let conflictPath = require('path').join(this.syncManager.syncFolder, conflictFileName);
+            try {
+                localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
+            } catch {
                 try {
+                    conflictPath = require('path').join(this.downloadFolder, conflictFileName);
                     localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
-                } catch {
-                    try {
-                        conflictPath = require('path').join(this.downloadFolder, conflictFileName);
-                        localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
-                    } catch {
-                        localContent = '[content not available]';
-                    }
-                }
-                serverMeta = winner;
-                serverContent = '[content not available]';
-                if (winner && winner.fileName && winner.version && this.syncManager.api.downloadFileVersion) {
-                    const os = require('os');
-                    const tempPath = require('path').join(os.tmpdir(), `conflict-server-${winner.fileName}.v${winner.version}`);
-                    try {
-                        await this.syncManager.api.downloadFileVersion(winner.fileName, winner.version, tempPath);
-                        serverContent = await require('fs-extra').readFile(tempPath, 'utf-8');
-                        await require('fs-extra').remove(tempPath);
-                    } catch {}
-                }
-            } else if (winner && winner.clientId === clientId) {
-                // This client is the winner
-                localMeta = winner;
-                serverMeta = winner;
-                let filePath = require('path').join(this.syncManager.syncFolder, winner.fileName);
-                try {
-                    localContent = await require('fs-extra').readFile(filePath, 'utf-8');
                 } catch {
                     localContent = '[content not available]';
                 }
-                serverContent = localContent;
-            } else {
-                // Not involved, fallback to default display (should not reach here)
-                await this.displayConflictDetails(conflict);
-                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
-                return;
+            }
+            serverMeta = winner;
+            serverContent = '[content not available]';
+            if (winner && winner.fileName && winner.version && this.syncManager.api.downloadFileVersion) {
+                const os = require('os');
+                const tempPath = require('path').join(os.tmpdir(), `conflict-server-${winner.fileName}.v${winner.version}`);
+                try {
+                    await this.syncManager.api.downloadFileVersion(winner.fileName, winner.version, tempPath);
+                    serverContent = await require('fs-extra').readFile(tempPath, 'utf-8');
+                    await require('fs-extra').remove(tempPath);
+                } catch {}
             }
 
             const displayObj = {
@@ -495,26 +474,38 @@ class CliInterface {
     async showConflicts() {
     try {
         console.log('\n⚠️ Conflicts:'.yellow.bold);
-        const conflicts = await this.syncManager.api.getConflicts();
-        
+        const allConflicts = await this.syncManager.api.getConflicts();
+        const clientId = this.syncManager.clientId;
+        // Only show conflicts where this client is a loser (not winner) and there is exactly one loser (themselves)
+        const conflicts = (allConflicts || []).filter(conflict =>
+            Array.isArray(conflict.losers) &&
+            conflict.losers.length === 1 &&
+            conflict.losers[0].clientId === clientId
+        );
+
         if (conflicts.length === 0) {
             console.log('No conflicts found.'.green);
             return;
         }
-        
+
         conflicts.forEach(conflict => {
-            const status = conflict.status === 'resolved' ? 'RESOLVED'.green : 'UNRESOLVED'.red;
-            console.log(`- ${conflict.fileName} [${status}]`.white);
+            const timestamp = conflict.timestamp
+                ? new Date(conflict.timestamp).toLocaleString()
+                : '';
+            console.log(`- ${conflict.fileName}`.white);
             console.log(`  ID: ${conflict.id}`.gray);
+            if (timestamp) {
+                console.log(`  Time: ${timestamp}`.gray);
+            }
             console.log(`  Reason: ${conflict.reason}`.yellow);
-            
-            if (conflict.status === 'resolved' && conflict.resolution) {
+
+            if (conflict.resolution) {
                 console.log(`  Resolution: ${conflict.resolution.method}`.green);
                 console.log(`  Resolved by: ${conflict.resolution.resolvedBy}`.green);
                 console.log(`  Resolved at: ${new Date(conflict.resolvedAt).toLocaleString()}`.green);
             }
         });
-        
+
     } catch (error) {
         console.error('Failed to fetch conflicts:'.red, error.message);
     }
