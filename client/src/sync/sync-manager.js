@@ -672,16 +672,28 @@ class SyncManager {
 
             let shouldDownload = false;
 
-            try {
-    const localContent = await fs.readFile(localFile.path);
-    const localHash = require('crypto').createHash('md5').update(localContent).digest('hex');
+            // --- FIX: Always prefer server version if server version is newer or checksum differs ---
+            const serverVersion = typeof serverFile.version !== 'undefined' ? Number(serverFile.version) : undefined;
+            const localVersion = typeof localFile.version !== 'undefined' ? Number(localFile.version) : undefined;
 
-    if (serverFile.checksum && serverFile.checksum !== localHash) {
-        shouldDownload = true;
-    }
-} catch {
-    shouldDownload = true; // Missing file locally? Force download
-}
+            if (
+                typeof serverVersion !== 'undefined' &&
+                (typeof localVersion === 'undefined' || serverVersion > localVersion)
+            ) {
+                shouldDownload = true;
+            } else if (serverTime > localTime) {
+                shouldDownload = true;
+            } else {
+                try {
+                    const localContent = await fs.readFile(localFile.path);
+                    const localHash = require('crypto').createHash('md5').update(localContent).digest('hex');
+                    if (serverFile.checksum && serverFile.checksum !== localHash) {
+                        shouldDownload = true;
+                    }
+                } catch {
+                    shouldDownload = true; // Missing file locally? Force download
+                }
+            }
 
             // Force overwrite if there's a conflict file
             const baseName = fileName.replace(/\.[^/.]+$/, '');

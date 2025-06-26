@@ -3,6 +3,8 @@ const colors = require('colors');
 const path = require('path');
 const fs = require('fs-extra');
 const stringArgv = require('string-argv').default || require('string-argv');
+const inquirer = require('inquirer');
+const prompt = inquirer.createPromptModule();
 
 class CliInterface {
     constructor(syncManager, options = {}) {
@@ -25,7 +27,9 @@ class CliInterface {
             'config': this.showConfig.bind(this),
             'restore': this.restoreVersion.bind(this),
             'rename': this.renameFile.bind(this),
-            'resolve': this.resolveConflictById.bind(this)
+            'resolve': this.resolveConflictById.bind(this),
+            'import': this.importFile.bind(this),
+            'touch': this.createEmptyFile.bind(this)
         };
     }
 
@@ -516,11 +520,13 @@ class CliInterface {
         console.log('  conflicts'.cyan + '       - Show detected conflicts');
         console.log('  resolve'.cyan + ' <conflictId>    - Resolve a file conflict by conflict ID (see conflicts command)');
         console.log('  rename'.cyan + ' <old> <new> - Rename a file');
+        console.log('  import'.cyan + '            - Import a local file into the sync folder interactively');
         console.log('  pause'.cyan + '           - Pause synchronization');
         console.log('  resume'.cyan + '          - Resume synchronization');
         console.log('  config'.cyan + '          - Show current configuration');
         console.log('  help'.cyan + '            - Show this help message');
-        console.log('  quit'.cyan + '            - Exit the application\n');
+        console.log('  quit'.cyan + '            - Exit the application');
+        console.log('  touch'.cyan + ' <file>      - Create an empty file in the sync folder');
     }
 
     async restoreVersion(args) {
@@ -568,6 +574,68 @@ class CliInterface {
             }
         } catch (error) {
             console.error(`❌ Error renaming file:`, error.message.red);
+        }
+    }
+
+    async importFile(args) {
+        let currentDir = require('os').homedir();
+
+        while (true) {
+            // Read directory contents
+            const files = await fs.readdir(currentDir);
+            const choices = files.map(f => {
+                const fullPath = path.join(currentDir, f);
+                return fs.statSync(fullPath).isDirectory()
+                    ? { name: `[DIR] ${f}`, value: { type: 'dir', name: f } }
+                    : { name: f, value: { type: 'file', name: f } };
+            });
+            if (currentDir !== require('os').homedir()) {
+                choices.unshift({ name: '[..] Go up', value: { type: 'up' } });
+            }
+
+            const { selected } = await prompt([
+                {
+                    type: 'list',
+                    name: 'selected',
+                    message: `Browse: ${currentDir}`,
+                    choices
+                }
+            ]);
+
+            if (selected.type === 'dir') {
+                currentDir = path.join(currentDir, selected.name);
+            } else if (selected.type === 'up') {
+                currentDir = path.dirname(currentDir);
+            } else if (selected.type === 'file') {
+                const localPath = path.join(currentDir, selected.name);
+                const destPath = path.join(this.syncManager.syncFolder, selected.name);
+                if (await fs.pathExists(destPath)) {
+                    console.log(`A file named ${selected.name} already exists in the sync folder.`.red);
+                    return;
+                }
+                await fs.copyFile(localPath, destPath);
+                console.log(`✅ Imported ${localPath} into sync folder as ${destPath}`.green);
+                return;
+            }
+        }
+    }
+
+    async createEmptyFile(args) {
+        if (!args || args.length === 0) {
+            console.log('Usage: touch <filename>'.yellow);
+            return;
+        }
+        const fileName = args[0];
+        const destPath = path.join(this.syncManager.syncFolder, fileName);
+        try {
+            if (await fs.pathExists(destPath)) {
+                console.log(`File "${fileName}" already exists in the sync folder.`.red);
+                return;
+            }
+            await fs.ensureFile(destPath);
+            console.log(`✅ Created empty file: ${destPath}`.green);
+        } catch (error) {
+            console.error('❌ Error creating file:'.red, error.message);
         }
     }
 
