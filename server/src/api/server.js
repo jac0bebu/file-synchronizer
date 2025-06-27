@@ -348,6 +348,25 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
             checksum
         };
 
+        // --- NEW: Check if latest version already has this checksum ---
+        // Get all versions for this file
+        const allVersions = await metadataStorage.getAllVersions(fileName);
+        if (allVersions && allVersions.length > 0) {
+            // Find the latest version (highest version number)
+            const latestMeta = allVersions.reduce((a, b) => (a.version > b.version ? a : b));
+            if (latestMeta && latestMeta.checksum === checksum) {
+                // Already up-to-date, do not create new version
+                res.json({
+                    success: true,
+                    message: 'File already up-to-date, no new version created',
+                    version: latestMeta.version,
+                    metadata: latestMeta
+                });
+                return;
+            }
+        }
+        // --- END NEW ---
+
         // Clean up old entries
         for (const [key, arr] of recentUploads.entries()) {
             recentUploads.set(key, arr.filter(entry => now - entry.timestamp <= SYNC_INTERVAL_MS));
@@ -478,20 +497,40 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
         winner = allCandidates[0];
         losers = allCandidates.slice(1);
 
-        // Save the winner as the main file (new version)
-        const nextVersion = await metadataStorage.getNextVersion(fileName);
-        await fileStorage.saveFile(fileName, winner.buffer, nextVersion);
-        const winnerMeta = await metadataStorage.saveMetadata({
-            fileId: winner.fileId,
-            fileName,
-            version: nextVersion,
-            size: winner.size,
-            checksum: require('crypto').createHash('md5').update(winner.buffer).digest('hex'),
-            clientId: winner.clientId,
-            lastModified: winner.lastModified,
-            lastUpdated: new Date().toISOString()
-        });
-
+        // --- NEW: Only create a new version for the winner if its checksum is not already the latest ---
+        // Get all versions for this file again (in case of race)
+        const allVersionsAfter = await metadataStorage.getAllVersions(fileName);
+        let winnerVersion = null;
+        let winnerMeta = null; // <-- ensure this is always set
+        if (allVersionsAfter && allVersionsAfter.length > 0) {
+            const latestMeta = allVersionsAfter.reduce((a, b) => (a.version > b.version ? a : b));
+            if (latestMeta && latestMeta.checksum === require('crypto').createHash('md5').update(winner.buffer).digest('hex')) {
+                winnerVersion = latestMeta.version;
+                winnerMeta = latestMeta;
+            }
+        }
+        if (!winnerVersion) {
+            // Save the winner as the main file (new version)
+            const nextVersion = await metadataStorage.getNextVersion(fileName);
+            await fileStorage.saveFile(fileName, winner.buffer, nextVersion);
+            winnerMeta = await metadataStorage.saveMetadata({
+                fileId: winner.fileId,
+                fileName,
+                version: nextVersion,
+                size: winner.size,
+                checksum: require('crypto').createHash('md5').update(winner.buffer).digest('hex'),
+                clientId: winner.clientId,
+                lastModified: winner.lastModified,
+                lastUpdated: new Date().toISOString()
+            });
+            winner.version = nextVersion;
+            winner.meta = winnerMeta;
+            winnerVersion = nextVersion;
+        } else {
+            // Already exists, get the metadata for response
+            winner.meta = winnerMeta;
+            winner.version = winnerVersion;
+        }
         // Save each loser as a conflict file
         const loserMetas = [];
         for (const loser of losers) {
@@ -535,7 +574,7 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
             fileName,
             reason: 'Simultaneous modification detected',
             conflictType: 'multi_client_concurrent_modification',
-            winner: {
+            winner: winnerMeta ? {
                 fileId: winnerMeta.fileId,
                 fileName: winnerMeta.fileName,
                 clientId: winnerMeta.clientId,
@@ -545,7 +584,7 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
                 version: winnerMeta.version,
                 createdAt: winnerMeta.createdAt,
                 updatedAt: winnerMeta.updatedAt
-            },
+            } : {},
             losers: loserMetas.map(meta => ({
                 fileId: meta.fileId,
                 fileName: meta.fileName,
@@ -558,7 +597,7 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
                 createdAt: meta.createdAt,
                 updatedAt: meta.updatedAt
             })),
-            allClients: [winnerMeta.clientId, ...loserMetas.map(meta => meta.clientId)],
+            allClients: [winnerMeta ? winnerMeta.clientId : winner.clientId, ...loserMetas.map(meta => meta.clientId)],
             timestamp: new Date().toISOString(),
             status: 'unresolved'
         };
@@ -571,12 +610,12 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
             res.status(409).json({
                 success: false,
                 error: 'Conflict detected',
-                message: `Conflict detected: "${fileName}" was modified by multiple clients at nearly the same time. The version from "${winnerMeta.clientId}" (saved at ${winnerMeta.lastModified}) was kept. Your version was saved as a conflict file. Other conflicting clients: ${loserMetas.filter(l => l.clientId !== clientId).map(l => l.clientId).join(', ')}`,
+                message: `Conflict detected: "${fileName}" was modified by multiple clients at nearly the same time. The version from "${winner.meta.clientId}" (saved at ${winner.meta.lastModified}) was kept. Your version was saved as a conflict file. Other conflicting clients: ${loserMetas.filter(l => l.clientId !== clientId).map(l => l.clientId).join(', ')}`,
                 conflict: {
                     fileName,
                     winner: {
-                        clientId: winnerMeta.clientId,
-                        lastModified: winnerMeta.lastModified
+                        clientId: winner.meta.clientId,
+                        lastModified: winner.meta.lastModified
                     },
                     losers: loserMetas.map(l => ({
                         clientId: l.clientId,
@@ -594,10 +633,10 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
         res.json({
             success: true,
             message: `File uploaded successfully as the fastest client. Other conflicting clients: ${loserMetas.map(l => l.clientId).join(', ')}`,
-            version: nextVersion,
+            version: winner.version,
             metadata: {
-                ...winnerMeta,
-                version: nextVersion
+                ...winner.meta,
+                version: winner.version
             },
             conflictId: conflictEntry.id
         });
