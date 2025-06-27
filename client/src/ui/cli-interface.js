@@ -534,7 +534,8 @@ class CliInterface {
             console.log('Usage: restore <filename> <version>'.red);
             return;
         }
-        const [fileName, version] = args;
+        const version = args[args.length - 1];
+        const fileName = args.slice(0, -1).join(' ');
         // Add confirmation prompt
         this.rl.question(
             `Are you sure you want to restore ${fileName} version ${version} as a new version? (yes/no): `.yellow,
@@ -545,11 +546,19 @@ class CliInterface {
                         const result = await this.syncManager.api.restoreFileVersion(fileName, version, this.syncManager.clientId);
                         if (result.success) {
                             console.log(`✅ Restored ${fileName} version ${version} as version ${result.version}`.green);
+                        } else if (result.error && result.error.toLowerCase().includes('not found')) {
+                            console.log(`❌ No file or version found for "${fileName}" version ${version}.`.red);
                         } else {
                             console.log(`❌ Failed to restore: ${result.error || 'Unknown error'}`.red);
                         }
                     } catch (error) {
-                        console.error(`❌ Error restoring version:`.red, error.message);
+                        if (error.response && error.response.status === 404) {
+                            console.error(`❌ No file or version found for "${fileName}" version ${version}.`.red);
+                        } else if (error.response && error.response.status === 500) {
+                            console.error('❌ Server error: An internal error occurred while restoring the file. Please try again later.'.red);
+                        } else {
+                            console.error(`❌ Error restoring version:`.red, error.message || error.toString());
+                        }
                     }
                 } else {
                     console.log('Restore cancelled.'.gray);
