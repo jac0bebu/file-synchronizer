@@ -4,36 +4,36 @@ const path = require('path');
 class MetadataStorage {
     constructor() {
         this.metadataPath = path.join(__dirname, 'metadata');
-        this.dbFile = path.join(this.metadataPath, 'file-metadata.json');
-        this.conflictsFile = path.join(this.metadataPath, 'conflicts.json');
+        this.filesDir = path.join(this.metadataPath, 'files');
+        this.conflictsDir = path.join(this.metadataPath, 'conflicts'); // Use directory for conflicts
         this.initPromise = this.init();
     }
 
     async init() {
         await fs.ensureDir(this.metadataPath);
-        if (!await fs.pathExists(this.dbFile)) {
-            await fs.writeJson(this.dbFile, []);
-        }
-        if (!await fs.pathExists(this.conflictsFile)) {
-            await fs.writeJson(this.conflictsFile, []);
-        }
+        await fs.ensureDir(this.filesDir);
+        await fs.ensureDir(this.conflictsDir); // Ensure conflicts directory exists
     }
 
     async getAllMetadata() {
         await this.initPromise;
-        return await fs.readJson(this.dbFile);
+        const files = await fs.readdir(this.filesDir);
+        const all = [];
+        for (const file of files) {
+            if (file.endsWith('.json')) {
+                const meta = await fs.readJson(path.join(this.filesDir, file));
+                all.push(meta);
+            }
+        }
+        return all;
     }
 
     async saveMetadata(metadata) {
         await this.initPromise;
-        const allData = await this.getAllMetadata();
-        
         // Check for conflicts
         const conflict = await this.detectConflict(metadata);
         if (conflict) {
             await this.saveConflict(conflict); // Ensure conflict is saved
-            // Optionally: Save the conflicted file's metadata here if needed
-            // await this.saveMetadataForConflictedFile(metadata);
             throw new Error(`Conflict detected: ${conflict.reason}`);
         }
 
@@ -48,20 +48,13 @@ class MetadataStorage {
             checksum: metadata.checksum || null,
             clientId: metadata.clientId || 'unknown',
             lastModified: metadata.lastModified || now,
-            chunks: metadata.chunks || null //
+            chunks: metadata.chunks || null
         };
 
-        const existingIndex = allData.findIndex(item => 
-            item.fileId === metadata.fileId && item.version === metadata.version
-        );
-
-        if (existingIndex >= 0) {
-            allData[existingIndex] = { ...allData[existingIndex], ...newMetadata };
-        } else {
-            allData.push(newMetadata);
-        }
-
-        await fs.writeJson(this.dbFile, allData, { spaces: 2 });
+        // Save as individual file
+        const fileId = newMetadata.fileId;
+        if (!fileId) throw new Error('fileId is required for metadata');
+        await fs.writeJson(path.join(this.filesDir, `${fileId}.json`), newMetadata, { spaces: 2 });
         return newMetadata;
     }
 
@@ -94,34 +87,37 @@ class MetadataStorage {
 
     async saveConflict(conflict) {
         await this.initPromise;
-        const conflicts = await fs.readJson(this.conflictsFile);
-        // Prevent duplicate conflict id
-        if (!conflicts.some(c => c.id === conflict.id)) {
-            conflicts.push(conflict);
-            await fs.writeJson(this.conflictsFile, conflicts, { spaces: 2 });
+        const conflictPath = path.join(this.conflictsDir, `${conflict.id}.json`);
+        if (!(await fs.pathExists(conflictPath))) {
+            await fs.writeJson(conflictPath, conflict, { spaces: 2 });
         }
     }
 
     async getConflicts() {
         await this.initPromise;
-        return await fs.readJson(this.conflictsFile);
+        const files = await fs.readdir(this.conflictsDir);
+        const all = [];
+        for (const file of files) {
+            if (file.endsWith('.json')) {
+                const conflict = await fs.readJson(path.join(this.conflictsDir, file));
+                all.push(conflict);
+            }
+        }
+        return all;
     }
 
     async resolveConflict(conflictId, resolution) {
         await this.initPromise;
-        const conflicts = await fs.readJson(this.conflictsFile);
-        const conflictIndex = conflicts.findIndex(c => c.id === conflictId);
-        
-        if (conflictIndex === -1) {
+        const conflictPath = path.join(this.conflictsDir, `${conflictId}.json`);
+        if (!(await fs.pathExists(conflictPath))) {
             throw new Error('Conflict not found');
         }
-        
-        conflicts[conflictIndex].status = 'resolved';
-        conflicts[conflictIndex].resolution = resolution;
-        conflicts[conflictIndex].resolvedAt = new Date().toISOString();
-        
-        await fs.writeJson(this.conflictsFile, conflicts, { spaces: 2 });
-        return conflicts[conflictIndex];
+        const conflict = await fs.readJson(conflictPath);
+        conflict.status = 'resolved';
+        conflict.resolution = resolution;
+        conflict.resolvedAt = new Date().toISOString();
+        await fs.writeJson(conflictPath, conflict, { spaces: 2 });
+        return conflict;
     }
 
     async getLatestVersion(fileName) {
@@ -146,25 +142,34 @@ class MetadataStorage {
 
     async getMetadata(fileId) {
         await this.initPromise;
-        const allData = await this.getAllMetadata();
-        return allData.find(item => item.fileId === fileId);
+        const filePath = path.join(this.filesDir, `${fileId}.json`);
+        if (await fs.pathExists(filePath)) {
+            return await fs.readJson(filePath);
+        }
+        return null;
     }
 
     async deleteMetadata(fileId) {
         await this.initPromise;
-        const allData = await this.getAllMetadata();
-        const filtered = allData.filter(item => item.fileId !== fileId);
-        await fs.writeJson(this.dbFile, filtered, { spaces: 2 });
+        const filePath = path.join(this.filesDir, `${fileId}.json`);
+        if (await fs.pathExists(filePath)) {
+            await fs.remove(filePath);
+        }
     }
 
     async deleteMetadataByFileName(fileName) {
-    await this.initPromise;
-    const allData = await this.getAllMetadata();
-    const filtered = allData.filter(item => item.fileName !== fileName);
-    await fs.writeJson(this.dbFile, filtered, { spaces: 2 });
-    return true;
-}
-
+        await this.initPromise;
+        const allData = await this.getAllMetadata();
+        for (const meta of allData) {
+            if (meta.fileName === fileName) {
+                const filePath = path.join(this.filesDir, `${meta.fileId}.json`);
+                if (await fs.pathExists(filePath)) {
+                    await fs.remove(filePath);
+                }
+            }
+        }
+        return true;
+    }
 
     async getNextVersion(fileName) {
         const latest = await this.getLatestVersion(fileName);
@@ -175,17 +180,65 @@ class MetadataStorage {
         await this.initPromise;
         const allData = await this.getAllMetadata();
         let changed = false;
-        for (let item of allData) {
-            if (item.fileName === oldName) {
-                item.fileName = newName;
+        for (const meta of allData) {
+            if (meta.fileName === oldName) {
+                meta.fileName = newName;
+                await fs.writeJson(path.join(this.filesDir, `${meta.fileId}.json`), meta, { spaces: 2 });
                 changed = true;
             }
-        }
-        if (changed) {
-            await fs.writeJson(this.dbFile, allData, { spaces: 2 });
         }
         return changed;
     }
 }
 
 module.exports = new MetadataStorage();
+
+// --- One-time migration script for legacy metadata.json and conflicts.json ---
+(async () => {
+    const fs = require('fs-extra');
+    const path = require('path');
+    const metadataBase = path.join(__dirname, 'metadata');
+    const legacyMetadataFile = path.join(metadataBase, 'metadata.json');
+    const filesDir = path.join(metadataBase, 'files');
+    const legacyConflictsFile = path.join(metadataBase, 'conflicts.json');
+    const conflictsDir = path.join(metadataBase, 'conflicts');
+    try {
+        // Migrate metadata.json to files/
+        if (await fs.pathExists(legacyMetadataFile)) {
+            const files = await fs.readdir(filesDir);
+            if (files.length === 0) {
+                const legacyData = await fs.readJson(legacyMetadataFile);
+                if (Array.isArray(legacyData)) {
+                    for (const meta of legacyData) {
+                        if (meta.fileId) {
+                            const filePath = path.join(filesDir, `${meta.fileId}.json`);
+                            await fs.writeJson(filePath, meta, { spaces: 2 });
+                        }
+                    }
+                    console.log(`[metadata-storage] Migrated ${legacyData.length} metadata entries to per-file JSON files.`);
+                    await fs.move(legacyMetadataFile, legacyMetadataFile + '.bak', { overwrite: true });
+                }
+            }
+        }
+        // Migrate conflicts.json to conflicts/
+        if (await fs.pathExists(legacyConflictsFile)) {
+            await fs.ensureDir(conflictsDir);
+            const files = await fs.readdir(conflictsDir);
+            if (files.length === 0) {
+                const legacyConflicts = await fs.readJson(legacyConflictsFile);
+                if (Array.isArray(legacyConflicts)) {
+                    for (const conflict of legacyConflicts) {
+                        if (conflict.id) {
+                            const conflictPath = path.join(conflictsDir, `${conflict.id}.json`);
+                            await fs.writeJson(conflictPath, conflict, { spaces: 2 });
+                        }
+                    }
+                    console.log(`[metadata-storage] Migrated ${legacyConflicts.length} conflicts to per-file JSON files.`);
+                    await fs.move(legacyConflictsFile, legacyConflictsFile + '.bak', { overwrite: true });
+                }
+            }
+        }
+    } catch (err) {
+        console.error('[metadata-storage] Migration error:', err);
+    }
+})();
