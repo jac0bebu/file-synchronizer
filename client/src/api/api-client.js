@@ -66,7 +66,7 @@ class ApiClient {
     }
 
     async uploadChunkedFile(filePath, clientId) {
-        const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+        const CHUNK_SIZE = 4 * 1024 * 1024; // 10MB
         const fileName = path.basename(filePath);
         const stats = await fs.stat(filePath);
         const totalSize = stats.size;
@@ -106,7 +106,7 @@ class ApiClient {
             }
         }
 
-        if (uploadedChunks === totalChunks) {
+        if (uploadedChunks === totalChunks) { 
             return { success: true, message: 'All chunks uploaded', fileId, fileName };
         } else {
             throw new Error('Not all chunks uploaded');

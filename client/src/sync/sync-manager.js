@@ -128,7 +128,7 @@ class SyncManager {
             let result;
             if (fileSize > CHUNK_SIZE) {
                 // Alert user in CLI about chunked upload
-                console.log(`⚠️  File "${fileName}" is larger than 10MB. Using chunked upload...`.yellow.bold);
+                console.log(`⚠️  File "${fileName}" is larger than 4MB. Using chunked upload...`.yellow.bold);
                 result = await this.api.uploadChunkedFile(filePath, this.clientId);
                 console.log(`Successfully uploaded all chunks for ${fileName}`.green);
                 this.updateSyncStatus(fileName, 'synced', { 
