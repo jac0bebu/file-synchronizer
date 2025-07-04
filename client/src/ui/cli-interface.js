@@ -589,6 +589,12 @@ class CliInterface {
         }
         const [oldName, newName] = args;
         try {
+            if (!this.syncManager.isServerOnline()) {
+                // Queue rename if offline
+                this.syncManager.queueRename(oldName, newName);
+                console.log(`✅ Rename from ${oldName} to ${newName} queued (offline, will sync when online)`.yellow);
+                return;
+            }
             const result = await this.syncManager.api.renameFile(oldName, newName);
             if (result.success) {
                 console.log(`✅ File renamed from ${oldName} to ${newName}`.green);
@@ -596,7 +602,19 @@ class CliInterface {
                 console.log(`❌ Failed to rename: ${result.error || 'Unknown error'}`.red);
             }
         } catch (error) {
-            console.error(`❌ Error renaming file:`, error.message.red);
+            // If error is connection error, queue the rename
+            if (
+                error.message &&
+                (error.message.includes('ECONNREFUSED') ||
+                 error.message.includes('ENOTFOUND') ||
+                 error.message.includes('Server connection failed') ||
+                 error.message.includes('ETIMEDOUT'))
+            ) {
+                this.syncManager.queueRename(oldName, newName);
+                console.log(`✅ Rename from ${oldName} to ${newName} queued (offline, will sync when online)`.yellow);
+            } else {
+                console.error(`❌ Error renaming file:`, error.message.red);
+            }
         }
     }
 

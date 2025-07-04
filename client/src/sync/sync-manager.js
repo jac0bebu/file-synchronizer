@@ -21,7 +21,7 @@ class SyncManager {
         this.conflictHistory = new Map(); // Track resolved conflicts
 
         this.serverOnline = true; // Track server status
-        this.offlineQueue = [];   // Queue for offline changes
+        this.offlineQueue = [];   // Queue for offline changes (add/change/delete/rename)
         this.lastServerStatus = true;
 
         console.log('Sync Manager initialized'.green);
@@ -834,7 +834,18 @@ class SyncManager {
         console.log('\n🔄 Processing queued offline changes...'.cyan);
         // Sort by timestamp to preserve order
         this.offlineQueue.sort((a, b) => a.timestamp - b.timestamp);
-        for (const change of this.offlineQueue) {
+
+        // First process renames
+        for (const change of this.offlineQueue.filter(c => c.type === 'rename')) {
+            try {
+                await this.api.renameFile(change.oldName, change.newName);
+                console.log(`Renamed ${change.oldName} to ${change.newName} on server`.green);
+            } catch (err) {
+                console.error(`Failed to process queued rename for ${change.oldName}:`, err.message);
+            }
+        }
+        // Then process other changes (add/change/delete)
+        for (const change of this.offlineQueue.filter(c => c.type !== 'rename')) {
             try {
                 if (change.type === 'delete' || change.type === 'unlink') {
                     this.markForDeletion(change.fileName);
@@ -842,7 +853,6 @@ class SyncManager {
                     try {
                         await this.uploadFile(change.filePath);
                     } catch (err) {
-                        // If conflict, show the same conflict message as online
                         if (err && err.conflict) {
                             await this.handleConflict(change.fileName, change.filePath, err.details);
                         } else {
@@ -865,6 +875,20 @@ class SyncManager {
         }
 
         console.log('Sync manager stopped'.yellow);
+    }
+
+    isServerOnline() {
+        return this.serverOnline;
+    }
+
+    queueRename(oldName, newName) {
+        this.offlineQueue.push({
+            type: 'rename',
+            oldName,
+            newName,
+            timestamp: Date.now()
+        });
+        console.log(`Queued rename from ${oldName} to ${newName} (offline)`.yellow);
     }
 }
 
