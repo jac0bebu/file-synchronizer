@@ -19,7 +19,11 @@ class SyncManager {
 
         this.pendingConflicts = new Map(); // Track unresolved conflicts
         this.conflictHistory = new Map(); // Track resolved conflicts
-        
+
+        this.serverOnline = true; // Track server status
+        this.offlineQueue = [];   // Queue for offline changes
+        this.lastServerStatus = true;
+
         console.log('Sync Manager initialized'.green);
         console.log(`Client ID: ${this.clientId}`.cyan);
         console.log(`Sync folder: ${this.syncFolder}`.cyan);
@@ -61,6 +65,25 @@ class SyncManager {
         }
     }
 
+    async checkServerStatus(isStartup = false) {
+        try {
+            await this.api.getHealth();
+            if (!this.serverOnline) {
+                this.serverOnline = true;
+                console.log('\n✅ Server is ONLINE'.green.bold);
+                if (!isStartup) {
+                    await this.processOfflineQueue();
+                    await this.performFullSync();
+                }
+            }
+        } catch (error) {
+            if (this.serverOnline) {
+                this.serverOnline = false;
+                console.log('\n❌ Server is OFFLINE. Changes will be queued and synced when online.'.red.bold);
+            }
+        }
+    }
+
     // Add method to mark file for deletion on server
     markForDeletion(fileName) {
         this.pendingDeletions.add(fileName);
@@ -85,7 +108,14 @@ class SyncManager {
         }
         try {
             this.updateSyncStatus(fileName, 'processing');
-            
+            if (!this.serverOnline) {
+                // Queue the change
+                this.offlineQueue.push({ type, filePath, fileName, timestamp: Date.now() });
+                this.updateSyncStatus(fileName, 'queued-offline');
+                console.log(`Queued ${type} for ${fileName} (offline)`.yellow);
+                return;
+            }
+
             if (type === 'delete' || type === 'unlink') {
                 // Handle file deletion - mark for server deletion
                 console.log(`File deleted locally: ${fileName}`.red);
@@ -93,15 +123,15 @@ class SyncManager {
                 this.updateSyncStatus(fileName, 'deleted');
                 return;
             }
-            
+
             if (['add', 'change'].includes(type)) {
                 await this.uploadFile(filePath);
             }
-            
+
         } catch (error) {
             console.error(`Error handling file change for ${fileName}:`.red, error.message);
             this.updateSyncStatus(fileName, 'error', error.message);
-            
+
             if (error.conflict) {
                 await this.handleConflict(fileName, filePath, error.details);
             }
@@ -131,14 +161,14 @@ class SyncManager {
                 console.log(`⚠️  File "${fileName}" is larger than 4MB. Using chunked upload...`.yellow.bold);
                 result = await this.api.uploadChunkedFile(filePath, this.clientId);
                 console.log(`Successfully uploaded all chunks for ${fileName}`.green);
-                this.updateSyncStatus(fileName, 'synced', { 
+                this.updateSyncStatus(fileName, 'synced', {
                     lastSync: new Date().toISOString()
                 });
             } else {
                 // Use normal upload for small files
                 result = await this.api.uploadFile(filePath, this.clientId);
                 console.log(`Successfully uploaded ${fileName} (version ${result.version})`.green);
-                this.updateSyncStatus(fileName, 'synced', { 
+                this.updateSyncStatus(fileName, 'synced', {
                     version: result.version,
                     lastSync: new Date().toISOString()
                 });
@@ -152,7 +182,7 @@ class SyncManager {
                 try {
                     localStats = await fs.stat(filePath);
                     localContent = await fs.readFile(filePath, 'utf-8');
-                } catch {}
+                } catch { }
                 this.updateSyncStatus(fileName, 'conflict');
                 try {
                     const serverFiles = await this.api.listFiles();
@@ -168,7 +198,7 @@ class SyncManager {
                             this.fileWatcher.unignoreFile(fileName);
                         }
                         console.log(`Local file ${fileName} updated to latest server version after conflict.`.green);
-                        this.updateSyncStatus(fileName, 'synced', { 
+                        this.updateSyncStatus(fileName, 'synced', {
                             version: serverFile.version,
                             lastSync: new Date().toISOString()
                         });
@@ -198,14 +228,14 @@ class SyncManager {
     async handleConflict(fileName, localPath, conflictDetails) {
         console.log(`\n⚠️  CONFLICT DETECTED: ${fileName}`.yellow.bold);
         console.log('=' .repeat(60).yellow);
-        
+
         try {
             // Mark as conflict in status
-            this.updateSyncStatus(fileName, 'conflict', { 
+            this.updateSyncStatus(fileName, 'conflict', {
                 detectedAt: new Date().toISOString(),
-                details: conflictDetails 
+                details: conflictDetails
             });
-            
+
             // Get local file information
             const localStats = await fs.stat(localPath);
             const localContent = await fs.readFile(localPath, 'utf-8');
@@ -215,19 +245,19 @@ class SyncManager {
                 content: localContent,
                 location: 'LOCAL'
             };
-            
+
             // Get server file information
             let serverInfo = null;
             try {
                 const serverFiles = await this.api.listFiles();
                 const serverFile = serverFiles.find(f => (f.name || f.fileName) === fileName);
-                
+
                 if (serverFile) {
                     // Download server version to temporary location
                     const tempServerPath = path.join(this.syncFolder, `.conflict_server_${fileName}`);
                     await this.api.downloadFile(fileName, tempServerPath);
                     const serverContent = await fs.readFile(tempServerPath, 'utf-8');
-                    
+
                     serverInfo = {
                         size: serverFile.size,
                         lastModified: serverFile.lastModified,
@@ -240,10 +270,10 @@ class SyncManager {
             } catch (error) {
                 console.error('Failed to get server version:'.red, error.message);
             }
-            
+
             // Display both versions
             this.displayConflictVersions(fileName, localInfo, serverInfo);
-            
+
             // Store conflict for resolution
             this.pendingConflicts.set(fileName, {
                 localInfo,
@@ -252,8 +282,8 @@ class SyncManager {
                 detectedAt: new Date(),
                 resolved: false
             });
-            
-            
+
+
             // Clean up temporary files
             if (serverInfo && serverInfo.tempPath) {
                 try {
@@ -262,7 +292,7 @@ class SyncManager {
                     console.error('Failed to clean up temp file:'.red, error.message);
                 }
             }
-            
+
         } catch (error) {
             console.error(`Error handling conflict for ${fileName}:`.red, error.message);
             this.updateSyncStatus(fileName, 'conflict-error', error.message);
@@ -273,7 +303,7 @@ class SyncManager {
     displayConflictVersions(fileName, localInfo, serverInfo) {
         console.log(`\n📄 File: ${fileName}`.cyan.bold);
         console.log('-'.repeat(60));
-        
+
         // Local version
         // --- FIX: If lastConflictLocalInfo matches, use it for preview ---
         let displayLocal = localInfo;
@@ -289,14 +319,14 @@ class SyncManager {
         console.log(`   📅 Modified: ${displayLocal.lastModified ? new Date(displayLocal.lastModified).toLocaleString() : 'unknown'}`);
         console.log(`   📝 Content Preview:`);
         console.log('   ' + '-'.repeat(40));
-        const localPreview = displayLocal.content && displayLocal.content.length > 200 
-            ? displayLocal.content.substring(0, 200) + '...' 
+        const localPreview = displayLocal.content && displayLocal.content.length > 200
+            ? displayLocal.content.substring(0, 200) + '...'
             : (displayLocal.content || '');
         console.log(`   ${localPreview.split('\n').join('\n   ')}`);
         console.log('   ' + '-'.repeat(40));
-        
+
         console.log('');
-        
+
         // Server version
         if (serverInfo) {
             console.log('🌐 SERVER VERSION:'.blue.bold);
@@ -305,15 +335,15 @@ class SyncManager {
             console.log(`   🔢 Version: ${serverInfo.version || 'unknown'}`);
             console.log(`   📝 Content Preview:`);
             console.log('   ' + '-'.repeat(40));
-            const serverPreview = serverInfo.content.length > 200 
-                ? serverInfo.content.substring(0, 200) + '...' 
+            const serverPreview = serverInfo.content.length > 200
+                ? serverInfo.content.substring(0, 200) + '...'
                 : serverInfo.content;
             console.log(`   ${serverPreview.split('\n').join('\n   ')}`);
             console.log('   ' + '-'.repeat(40));
         } else {
             console.log('🌐 SERVER VERSION: Not available'.red);
         }
-        
+
         console.log('\n' + '='.repeat(60));
     }
 
@@ -321,7 +351,7 @@ class SyncManager {
     displayConflictVersions(fileName, localInfo, serverInfo) {
         console.log(`\n📄 File: ${fileName}`.cyan.bold);
         console.log('-'.repeat(60));
-        
+
         // Local version
         // --- FIX: If lastConflictLocalInfo matches, use it for preview ---
         let displayLocal = localInfo;
@@ -337,14 +367,14 @@ class SyncManager {
         console.log(`   📅 Modified: ${displayLocal.lastModified ? new Date(displayLocal.lastModified).toLocaleString() : 'unknown'}`);
         console.log(`   📝 Content Preview:`);
         console.log('   ' + '-'.repeat(40));
-        const localPreview = displayLocal.content && displayLocal.content.length > 200 
-            ? displayLocal.content.substring(0, 200) + '...' 
+        const localPreview = displayLocal.content && displayLocal.content.length > 200
+            ? displayLocal.content.substring(0, 200) + '...'
             : (displayLocal.content || '');
         console.log(`   ${localPreview.split('\n').join('\n   ')}`);
         console.log('   ' + '-'.repeat(40));
-        
+
         console.log('');
-        
+
         // Server version
         if (serverInfo) {
             console.log('🌐 SERVER VERSION:'.blue.bold);
@@ -353,15 +383,15 @@ class SyncManager {
             console.log(`   🔢 Version: ${serverInfo.version || 'unknown'}`);
             console.log(`   📝 Content Preview:`);
             console.log('   ' + '-'.repeat(40));
-            const serverPreview = serverInfo.content.length > 200 
-                ? serverInfo.content.substring(0, 200) + '...' 
+            const serverPreview = serverInfo.content.length > 200
+                ? serverInfo.content.substring(0, 200) + '...'
                 : serverInfo.content;
             console.log(`   ${serverPreview.split('\n').join('\n   ')}`);
             console.log('   ' + '-'.repeat(40));
         } else {
             console.log('🌐 SERVER VERSION: Not available'.red);
         }
-        
+
         console.log('\n' + '='.repeat(60));
     }
 
@@ -371,25 +401,25 @@ class SyncManager {
         console.log('\n' + '='.repeat(80).cyan);
         console.log('FULL CONTENT COMPARISON'.cyan.bold);
         console.log('='.repeat(80).cyan);
-        
+
         console.log('\n🏠 LOCAL CONTENT:'.green.bold);
         console.log('-'.repeat(40).green);
         console.log(localInfo.content);
         console.log('-'.repeat(40).green);
-        
+
         console.log('\n🌐 SERVER CONTENT:'.blue.bold);
         console.log('-'.repeat(40).blue);
         console.log(serverInfo.content);
         console.log('-'.repeat(40).blue);
-        
+
         console.log('\n' + '='.repeat(80).cyan);
     }
 
     async createMergedVersion(fileName, localInfo, serverInfo) {
-    try {
-        const mergedPath = path.join(this.syncFolder, `.conflict_merged_${fileName}`);
-        
-        // Create a merged file with both versions
+        try {
+            const mergedPath = path.join(this.syncFolder, `.conflict_merged_${fileName}`);
+
+            // Create a merged file with both versions
             const mergedContent = `
     <<<<<<< LOCAL VERSION (${new Date(localInfo.lastModified).toLocaleString()})
     ${localInfo.content}
@@ -404,16 +434,16 @@ class SyncManager {
     // 3. Save and close the file
     // 4. Press Enter in the terminal to continue
     `;
-            
+
             await fs.writeFile(mergedPath, mergedContent);
-            
+
             console.log(`\n📝 Created merged file: ${mergedPath}`.yellow);
             console.log('Opening in default editor...'.yellow);
-            
+
             // Try to open in default editor
             const { exec } = require('child_process');
             const platform = process.platform;
-            
+
             let command;
             if (platform === 'win32') {
                 command = `notepad "${mergedPath}"`;
@@ -422,41 +452,41 @@ class SyncManager {
             } else {
                 command = `nano "${mergedPath}"`;
             }
-            
+
             exec(command);
-            
+
             // Wait for user to finish editing
             const rl = readline.createInterface({
                 input: process.stdin,
                 output: process.stdout
             });
-            
+
             await new Promise(resolve => {
                 rl.question('\nPress Enter when you have finished editing the merged file...', () => {
                     rl.close();
                     resolve();
                 });
             });
-            
+
             return mergedPath;
-            
+
         } catch (error) {
             console.error('Failed to create merged version:'.red, error.message);
             return null;
         }
     }
-    
+
 
     // Method to list pending conflicts
     listPendingConflicts() {
         console.log('\n📋 PENDING CONFLICTS'.yellow.bold);
         console.log('='.repeat(40));
-        
+
         if (this.pendingConflicts.size === 0) {
             console.log('No pending conflicts ✅'.green);
             return;
         }
-        
+
         this.pendingConflicts.forEach((conflict, fileName) => {
             console.log(`⚠️  ${fileName}`.yellow);
             console.log(`   Detected: ${conflict.detectedAt.toLocaleString()}`);
@@ -474,10 +504,10 @@ class SyncManager {
             console.log(`No pending conflict found for ${fileName}`.yellow);
             return;
         }
-        
+
         const conflict = this.pendingConflicts.get(fileName);
         console.log(`\nResolving pending conflict for ${fileName}...`.blue);
-        
+
         // Display the conflict again
         this.displayConflictVersions(fileName, conflict.localInfo, conflict.serverInfo);
         
@@ -490,38 +520,38 @@ class SyncManager {
         try {
             const fileName = serverFile.name || serverFile.fileName;
             const localPath = path.join(this.syncFolder, fileName);
-            
+
             // CRITICAL: Ignore this file during download to prevent loop
             if (this.fileWatcher) {
                 this.fileWatcher.ignoreFile(fileName);
             }
-            
+
             this.updateSyncStatus(fileName, 'downloading');
             console.log(`Downloading ${fileName}`.blue);
-            
+
             const result = await this.api.downloadFile(fileName, localPath);
-            
+
             if (result.success) {
                 // Set file timestamp to match server timestamp
                 const serverTime = new Date(serverFile.lastModified);
                 await fs.utimes(localPath, serverTime, serverTime);
-                
+
                 console.log(`Successfully downloaded ${fileName}`.green);
                 this.updateSyncStatus(fileName, 'synced');
             }
-            
+
             // Wait a bit before resuming file watching for this file
             setTimeout(() => {
                 if (this.fileWatcher) {
                     this.fileWatcher.unignoreFile(fileName);
                 }
             }, 2000); // 2 second delay
-            
+
             return result;
         } catch (error) {
             console.error(`Failed to download ${fileName}:`.red, error.message);
             this.updateSyncStatus(fileName, 'error', error.message);
-            
+
             // Resume file watching even on error
             if (this.fileWatcher) {
                 this.fileWatcher.unignoreFile(fileName);
@@ -532,21 +562,21 @@ class SyncManager {
 
     async performFullSync() {
         console.log('Starting full synchronization...'.blue);
-        
+
         try {
             // Get server files
             const serverFiles = await this.api.listFiles();
             console.log(`Found ${serverFiles.length} files on server`.cyan);
-            
+
             // Get local files
             const localFiles = await this.getLocalFiles();
             console.log(`Found ${localFiles.length} files locally`.cyan);
-            
+
             // Compare and sync
             await this.compareAndSync(localFiles, serverFiles);
-            
+
             console.log('Full synchronization completed'.green.bold);
-            
+
         } catch (error) {
             console.error('Full sync failed:'.red, error.message);
         }
@@ -556,18 +586,18 @@ class SyncManager {
         try {
             // Get server files
             const serverFiles = await this.api.listFiles();
-            
+
             // Get local files
             const localFiles = await this.getLocalFiles();
-            
+
             // Compare and sync without verbose logging
             let updatesFound = await this.compareAndSync(localFiles, serverFiles, false);
-            
+
             // Only log if something actually changed
             if (updatesFound > 0) {
                 console.log(`Sync completed: ${updatesFound} updates processed`.green);
             }
-            
+
         } catch (error) {
             // Only log errors
             console.error('Sync error:'.red, error.message);
@@ -579,11 +609,11 @@ class SyncManager {
         try {
             const files = [];
             const fileNames = await fs.readdir(this.syncFolder);
-            
+
             for (const name of fileNames) {
                 const filePath = path.join(this.syncFolder, name);
                 const stats = await fs.stat(filePath);
-                
+
                 if (stats.isFile()) {
                     files.push({
                         name,
@@ -593,7 +623,7 @@ class SyncManager {
                     });
                 }
             }
-            
+
             return files;
         } catch (error) {
             console.error('Error reading local files:'.red, error.message);
@@ -717,7 +747,7 @@ class SyncManager {
                 try {
                     await fs.remove(localFile.path);
                     if (verbose) console.log(`Removed temp conflict file: ${localFile.name}`.gray);
-                } catch {}
+                } catch { }
             }
         }
 
@@ -759,7 +789,7 @@ class SyncManager {
 
     updateSyncStatus(fileName, status, details = {}) {
         const currentStatus = this.fileSyncStatus.get(fileName) || {};
-        
+
         this.fileSyncStatus.set(fileName, {
             ...currentStatus,
             status,
@@ -770,14 +800,14 @@ class SyncManager {
 
     getSyncStatus() {
         const result = [];
-        
+
         this.fileSyncStatus.forEach((status, fileName) => {
             result.push({
                 fileName,
                 ...status
             });
         });
-        
+
         return result;
     }
 
@@ -785,28 +815,55 @@ class SyncManager {
         if (this.syncIntervalId) {
             clearInterval(this.syncIntervalId);
         }
-        
         this.syncIntervalId = setInterval(async () => {
-            if (this.verbose) {
-                console.log('Running periodic sync...'.gray);
-            }
-            
-            try {
-                await this.performSyncQuietly();
-            } catch (error) {
-                console.error('Periodic sync failed:'.red, error.message);
+            await this.checkServerStatus();
+            if (this.serverOnline) {
+                try {
+                    await this.performSyncQuietly();
+                } catch (error) {
+                    console.error('Periodic sync failed:'.red, error.message);
+                }
             }
         }, this.pollInterval);
-        
         console.log(`Periodic sync started (every ${this.pollInterval/1000} seconds)`.cyan);
     }
-    
+
+    // Process queued changes when back online
+    async processOfflineQueue() {
+        if (this.offlineQueue.length === 0) return;
+        console.log('\n🔄 Processing queued offline changes...'.cyan);
+        // Sort by timestamp to preserve order
+        this.offlineQueue.sort((a, b) => a.timestamp - b.timestamp);
+        for (const change of this.offlineQueue) {
+            try {
+                if (change.type === 'delete' || change.type === 'unlink') {
+                    this.markForDeletion(change.fileName);
+                } else if (['add', 'change'].includes(change.type)) {
+                    try {
+                        await this.uploadFile(change.filePath);
+                    } catch (err) {
+                        // If conflict, show the same conflict message as online
+                        if (err && err.conflict) {
+                            await this.handleConflict(change.fileName, change.filePath, err.details);
+                        } else {
+                            console.error(`Failed to process queued change for ${change.fileName}:`, err.message);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error(`Failed to process queued change for ${change.fileName}:`, err.message);
+            }
+        }
+        this.offlineQueue = [];
+        console.log('✅ All offline changes processed.'.green);
+    }
+
     stop() {
         if (this.syncIntervalId) {
             clearInterval(this.syncIntervalId);
             this.syncIntervalId = null;
         }
-        
+
         console.log('Sync manager stopped'.yellow);
     }
 }

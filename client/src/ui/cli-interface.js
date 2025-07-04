@@ -12,6 +12,7 @@ class CliInterface {
         this.downloadFolder = options.downloadFolder || path.join(process.cwd(), 'downloads', options.username || 'unknown');
         this.username = options.username || 'unknown';
         this.rl = null;
+        this.lastServerStatus = true;
         this.commands = {
             'status': this.showStatus.bind(this),
             'sync': this.startSync.bind(this),
@@ -54,6 +55,19 @@ class CliInterface {
         });
 
         this.rl.prompt();
+
+        // Add periodic server status check for CLI feedback
+        setInterval(() => {
+            if (this.syncManager.serverOnline !== this.lastServerStatus) {
+                this.lastServerStatus = this.syncManager.serverOnline;
+                if (this.syncManager.serverOnline) {
+                    console.log('\n✅ Server is ONLINE. Syncing queued changes...'.green.bold);
+                } else {
+                    console.log('\n❌ Server is OFFLINE. Changes will be queued.'.red.bold);
+                }
+                if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
+            }
+        }, 2000);
     }
 
     async resolveConflictById(args) {

@@ -6,6 +6,7 @@ class FileWatcher {
     constructor(syncFolder, options = {}) {
         this.syncFolder = path.resolve(syncFolder);
         this.onChange = options.onChange || (() => {});
+        this.onServerStatusChange = options.onServerStatusChange || (() => {});
         this.debounceMs = options.debounceMs || 500;
         this.watcher = null;
         this.debounceTimers = {};
@@ -93,6 +94,10 @@ class FileWatcher {
             this.onChange(filePath, eventType);
             delete this.debounceTimers[filePath];
         }, this.debounceMs);
+    }
+
+    notifyServerStatus(isOnline) {
+        this.onServerStatusChange(isOnline);
     }
 
     stop() {
