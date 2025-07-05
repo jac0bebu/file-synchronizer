@@ -46,6 +46,7 @@ server/shared-storage/files/*
 server/shared-storage/versions/*
 server/shared-storage/chunks/*
 server/shared-storage/metadata/*
+server/shared-storage/conflicts/*
 
 # But keep the directories themselves
 !server/src/storage/files/.gitkeep
