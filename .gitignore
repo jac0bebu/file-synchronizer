@@ -41,6 +41,12 @@ server/src/storage/versions/*
 server/src/storage/chunks/*
 server/src/storage/metadata/*
 
+# Shared storage directories - EXCLUDE all user data
+server/shared-storage/files/*
+server/shared-storage/versions/*
+server/shared-storage/chunks/*
+server/shared-storage/metadata/*
+
 # But keep the directories themselves
 !server/src/storage/files/.gitkeep
 !server/src/storage/versions/.gitkeep
