@@ -134,6 +134,13 @@ sync>
 3. **Resolution strategy** applied (default: keep local version)
 4. **Metadata** updated with resolution details
 
+## 🔄 Server Instance Behavior
+
+- All server instances use the same shared storage for files and metadata.
+- Any file or metadata change is immediately visible to all server instances.
+- Clients can connect to the load balancer, and any server instance can handle their requests.
+- There is no "primary" or "secondary" server—all are equal and interchangeable.
+
 ## 🔧 Testing Multiple Clients
 
 ### Method 1: Create Additional Client Scripts

@@ -1,9 +1,18 @@
 const fs = require('fs-extra');
 const path = require('path');
 
+// Use shared storage directories from environment or fallback to default
+const STORAGE_ROOT = process.env.SHARED_STORAGE_ROOT || path.join(__dirname, '../storage');
+const METADATA_DIR = process.env.METADATA_DIR || path.join(STORAGE_ROOT, 'metadata');
+const CONFLICTS_DIR = process.env.CONFLICTS_DIR || path.join(STORAGE_ROOT, 'conflicts');
+
+// Ensure directories exist
+fs.ensureDirSync(METADATA_DIR);
+fs.ensureDirSync(CONFLICTS_DIR);
+
 class MetadataStorage {
     constructor() {
-        this.metadataPath = path.join(__dirname, 'metadata');
+        this.metadataPath = METADATA_DIR;
         this.filesDir = path.join(this.metadataPath, 'files');
         this.conflictsDir = path.join(this.metadataPath, 'conflicts'); // Use directory for conflicts
         this.initPromise = this.init();

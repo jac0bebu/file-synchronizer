@@ -193,16 +193,19 @@ if (require.main === module) {
             console.error('Username is required!');
             process.exit(1);
         }
-        rl.question('Enter the server IP address: ', (ip) => {
+        rl.question('Enter the load balancer IP address (e.g., 192.168.50.100): ', (ip) => {
             if (!ip || !ip.trim()) {
-                console.error('Server IP address is required!');
+                console.error('Load balancer IP address is required!');
                 process.exit(1);
             }
             const safeUsername = username.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
             const clientId = `client-${safeUsername}`;
             const syncFolder = path.resolve(__dirname, `../sync-folder/sync-folder-${safeUsername}`);
             const downloadFolder = path.resolve(__dirname, `../downloads/${safeUsername}`);
+            // Connect to load balancer on port 3000 (not individual server ports)
             const serverUrl = `http://${ip.trim()}:3000`;
+
+            console.log(`🔗 Connecting to load balancer at: ${serverUrl}`.cyan);
 
             const app = new SyncApplication({
                 clientId,

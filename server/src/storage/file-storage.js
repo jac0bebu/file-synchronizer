@@ -1,11 +1,19 @@
-const fs = require('fs-extra');
-const path = require('path');
 const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs-extra');
+
+// Use shared storage directories from environment or fallback to default
+const FILES_DIR = process.env.FILES_DIR || path.join(__dirname, '../storage/files');
+const VERSIONS_DIR = process.env.VERSIONS_DIR || path.join(__dirname, '../storage/versions');
+
+// Ensure directories exist
+fs.ensureDirSync(FILES_DIR);
+fs.ensureDirSync(VERSIONS_DIR);
 
 class FileStorage {
     constructor() {
-        this.storagePath = path.join(__dirname, 'files');
-        this.versionsPath = path.join(__dirname, 'versions');
+        this.storagePath = FILES_DIR;
+        this.versionsPath = VERSIONS_DIR;
         this.ensureDirectories();
     }
 
