@@ -48,6 +48,13 @@ server/shared-storage/chunks/*
 server/shared-storage/metadata/*
 server/shared-storage/conflicts/*
 
+# Keep .gitkeep files in storage directories
+!server/shared-storage/files/.gitkeep
+!server/shared-storage/versions/.gitkeep
+!server/shared-storage/chunks/.gitkeep
+!server/shared-storage/metadata/.gitkeep
+!server/shared-storage/conflicts/.gitkeep
+
 # But keep the directories themselves
 !server/src/storage/files/.gitkeep
 !server/src/storage/versions/.gitkeep
