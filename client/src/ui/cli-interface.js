@@ -643,6 +643,15 @@ class CliInterface {
             }
             await fs.ensureFile(destPath);
             console.log(`✅ Created empty file: ${destPath}`.green);
+
+            // --- Ensure sync manager handles the new file immediately ---
+            if (this.syncManager && typeof this.syncManager.handleFileChange === 'function') {
+                await this.syncManager.handleFileChange({
+                    type: 'add',
+                    path: destPath,
+                    fileName
+                });
+            }
         } catch (error) {
             console.error('❌ Error creating file:'.red, error.message);
         }

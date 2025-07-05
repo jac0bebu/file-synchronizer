@@ -8,11 +8,12 @@ const os = require('os');
 const queueManager = require('../queues/queue-manager');
 const fileStorage = require('../storage/file-storage');
 const metadataStorage = require('../storage/metadata-storage');
-const chunkDir = path.join(__dirname, '../storage/chunks');
+
+// Use shared storage from environment variables if available
+const chunkDir = process.env.CHUNKS_DIR || path.join(__dirname, '../storage/chunks');
 fs.ensureDirSync(chunkDir);
 
 const app = express();
-const port = 3000;
 
 // Middleware
 app.use(cors());
@@ -734,6 +735,7 @@ function getLocalIp() {
 }
 
 // Start server
+const port = process.env.PORT || 3000;
 app.listen(port, '0.0.0.0', () => {
     const ip = getLocalIp();
     console.log(`File Sync API running at http://${ip}:${port}`);
