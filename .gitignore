@@ -47,6 +47,20 @@ server/src/storage/metadata/*
 !server/src/storage/chunks/.gitkeep
 !server/src/storage/metadata/.gitkeep
 
+# Shared storage directories - EXCLUDE all user data
+server/shared-storage/files/*
+server/shared-storage/versions/*
+server/shared-storage/chunks/*
+server/shared-storage/metadata/*
+server/shared-storage/conflicts/*
+
+# Keep .gitkeep files in storage directories
+!server/shared-storage/files/.gitkeep
+!server/shared-storage/versions/.gitkeep
+!server/shared-storage/chunks/.gitkeep
+!server/shared-storage/metadata/.gitkeep
+!server/shared-storage/conflicts/.gitkeep
+
 # Client sync folder - EXCLUDE user files
 client/sync-folder/*
 !client/sync-folder/.gitkeep
