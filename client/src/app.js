@@ -9,7 +9,7 @@ const colors = require('colors');
 class SyncApplication {
     constructor(options = {}) {
         // Initialize configuration
-        this.serverUrl = options.serverUrl || 'http://localhost:3000';
+        this.serverUrl = options.serverUrl;
         this.syncFolder = options.syncFolder || path.join(__dirname, '../sync-folder');
         this.clientId = options.clientId || `client-${crypto.randomBytes(4).toString('hex')}`;
         this.pollInterval = options.pollInterval || 10000;

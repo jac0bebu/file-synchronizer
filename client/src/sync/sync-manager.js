@@ -24,6 +24,8 @@ class SyncManager {
         this.offlineQueue = [];   // Queue for offline changes (add/change/delete/rename)
         this.lastServerStatus = true;
 
+        this.isFirstSync = true; // Flag for first sync after startup
+
         console.log('Sync Manager initialized'.green);
         console.log(`Client ID: ${this.clientId}`.cyan);
         console.log(`Sync folder: ${this.syncFolder}`.cyan);
@@ -79,7 +81,6 @@ class SyncManager {
         } catch (error) {
             if (this.serverOnline) {
                 this.serverOnline = false;
-                console.log('\n❌ Server is OFFLINE. Changes will be queued and synced when online.'.red.bold);
             }
         }
     }
@@ -572,8 +573,10 @@ class SyncManager {
             const localFiles = await this.getLocalFiles();
             console.log(`Found ${localFiles.length} files locally`.cyan);
 
-            // Compare and sync
-            await this.compareAndSync(localFiles, serverFiles);
+            // Pass the flag to compareAndSync
+            await this.compareAndSync(localFiles, serverFiles, true, this.isFirstSync);
+
+            this.isFirstSync = false; // <-- Only the first sync after startup
 
             console.log('Full synchronization completed'.green.bold);
 
@@ -656,7 +659,7 @@ class SyncManager {
         }
     }
 
-    async compareAndSync(localFiles, serverFiles, verbose = true) {
+    async compareAndSync(localFiles, serverFiles, verbose = true, isFirstSync = false) {
         const serverFileMap = new Map();
         serverFiles.forEach(file => serverFileMap.set(file.name || file.fileName, file));
 
@@ -701,6 +704,7 @@ class SyncManager {
             } else {
                 // File exists locally, check if update is needed
                 let shouldDownload = false;
+                let shouldUpload = false;
 
                 // Compare version if available
                 const serverVersion = typeof serverFile.version !== 'undefined' ? Number(serverFile.version) : undefined;
@@ -708,17 +712,27 @@ class SyncManager {
 
                 if (
                     typeof serverVersion !== 'undefined' &&
-                    typeof localVersion !== 'undefined' &&
-                    serverVersion > localVersion
+                    typeof localVersion !== 'undefined'
                 ) {
-                    shouldDownload = true;
+                    if (serverVersion > localVersion) {
+                        shouldDownload = true;
+                    } else if (localVersion > serverVersion) {
+                        shouldUpload = true;
+                    }
                 } else if (serverFile.checksum) {
                     // Compare checksum if available
                     try {
                         const localContent = await fs.readFile(localFile.path);
                         const localHash = require('crypto').createHash('md5').update(localContent).digest('hex');
                         if (serverFile.checksum !== localHash) {
-                            shouldDownload = true;
+                            // Compare lastModified to decide which is newer
+                            const serverTime = new Date(serverFile.lastUpdated || serverFile.lastModified || 0);
+                            const localTime = new Date(localFile.lastModified);
+                            if (localTime > serverTime) {
+                                shouldUpload = true;
+                            } else {
+                                shouldDownload = true;
+                            }
                         }
                     } catch {
                         shouldDownload = true; // Missing file locally? Force download
@@ -727,13 +741,22 @@ class SyncManager {
                     // Fallback: compare lastModified
                     const serverTime = new Date(serverFile.lastUpdated || serverFile.lastModified || 0);
                     const localTime = new Date(localFile.lastModified);
-                    if (serverTime > localTime) {
+                    if (localTime > serverTime) {
+                        shouldUpload = true;
+                    } else if (serverTime > localTime) {
                         shouldDownload = true;
                     }
                 }
 
-                // Only download if file is actually different
-                if (shouldDownload) {
+                if (shouldUpload) {
+                    if (verbose) console.log(`Local file modified after server: uploading ${fileName}`.green);
+                    try {
+                        await this.uploadFile(localFile.path);
+                        updatesFound++;
+                    } catch (error) {
+                        console.error(`Failed to upload ${fileName}:`.red, error.message);
+                    }
+                } else if (shouldDownload) {
                     if (verbose) console.log(`Overwriting local file with server version: ${fileName}`.cyan);
                     await this.downloadFile(serverFile);
                     updatesFound++;
@@ -758,11 +781,8 @@ class SyncManager {
                 !this.recentlyDeleted.has(localFile.name) &&
                 !this.pendingDeletions.has(localFile.name)
             ) {
-                const fileAge = Date.now() - new Date(localFile.lastModified).getTime();
-                const isNewFile = fileAge < 5000;
-
-                if (isNewFile) {
-                    if (verbose) console.log(`New local file to upload: ${localFile.name}`.green);
+                if (isFirstSync) {
+                    if (verbose) console.log(`First sync: uploading local file: ${localFile.name}`.green);
                     try {
                         await this.uploadFile(localFile.path);
                         updatesFound++;
@@ -770,14 +790,56 @@ class SyncManager {
                         console.error(`Failed to upload ${localFile.name}:`.red, error.message);
                     }
                 } else {
-                    if (verbose) console.log(`File deleted from server by another client: ${localFile.name}`.red);
+                    // Normal logic (existing code)
+                    const fileAge = Date.now() - new Date(localFile.lastModified).getTime();
+                    const isNewFile = fileAge < 60000;
+                    if (isNewFile) {
+                        if (verbose) console.log(`New local file to upload: ${localFile.name}`.green);
+                        try {
+                            await this.uploadFile(localFile.path);
+                            updatesFound++;
+                        } catch (error) {
+                            console.error(`Failed to upload ${localFile.name}:`.red, error.message);
+                        }
+                    } else {
+                        if (verbose) console.log(`File deleted from server by another client: ${localFile.name}`.red);
+                        try {
+                            await fs.remove(localFile.path);
+                            console.log(`🗑️ Removed local file: ${localFile.name}`.yellow);
+                            this.updateSyncStatus(localFile.name, 'deleted');
+                            updatesFound++;
+                        } catch (error) {
+                            console.error(`Failed to remove local file ${localFile.name}:`.red, error.message);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Detect possible renames (simple heuristic: same size and similar mtime)
+        const unmatchedLocal = localFiles.filter(f =>
+            !serverFileMap.has(f.name) &&
+            !this.recentlyDeleted.has(f.name) &&
+            !this.pendingDeletions.has(f.name)
+        );
+        const unmatchedServer = serverFiles.filter(f =>
+            !localFileMap.has(f.name || f.fileName)
+        );
+
+        for (const localFile of unmatchedLocal) {
+            for (const serverFile of unmatchedServer) {
+                if (
+                    localFile.size === serverFile.size &&
+                    Math.abs(new Date(localFile.lastModified) - new Date(serverFile.lastModified || serverFile.lastUpdated)) < 10000
+                ) {
+                    if (verbose) console.log(`Detected rename: ${serverFile.name} -> ${localFile.name}`.magenta);
                     try {
-                        await fs.remove(localFile.path);
-                        console.log(`🗑️ Removed local file: ${localFile.name}`.yellow);
-                        this.updateSyncStatus(localFile.name, 'deleted');
+                        await this.api.renameFile(serverFile.name, localFile.name);
                         updatesFound++;
-                    } catch (error) {
-                        console.error(`Failed to remove local file ${localFile.name}:`.red, error.message);
+                        unmatchedServer.splice(unmatchedServer.indexOf(serverFile), 1);
+                        break;
+                    } catch (err) {
+                        console.error(`Failed to sync rename from ${serverFile.name} to ${localFile.name}:`, err.message);
                     }
                 }
             }

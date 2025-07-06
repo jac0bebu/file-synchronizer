@@ -63,7 +63,7 @@ class CliInterface {
                 if (this.syncManager.serverOnline) {
                     console.log('\n✅ Server is ONLINE. Syncing queued changes...'.green.bold);
                 } else {
-                    console.log('\n❌ Server is OFFLINE. Changes will be queued.'.red.bold);
+                    console.log('\n❌ Cannot connect to server. Changes will be queued and synced when connection is restored.'.red.bold);
                 }
                 if (this.rl && typeof this.rl.prompt === 'function') this.rl.prompt();
             }
