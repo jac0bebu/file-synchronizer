@@ -30,50 +30,67 @@ class MetadataStorage {
 
     async saveMetadata(metadata, fileContentBuffer = null) {
         await this.initPromise;
-        // Check for conflicts
-        const conflict = await this.detectConflict(metadata);
-        if (conflict) {
-            await this.saveConflict(conflict); // Ensure conflict is saved
 
-            // --- Always create a conflicted file for the loser client ---
-            // This works for both same and different computers
-            const safeClientId = String(metadata.clientId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
-            const safeFileName = String(metadata.fileName || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_');
-            const timestamp = Date.now();
-            const conflictedFileName = `${safeFileName}_conflicted_by_${safeClientId}_${timestamp}`;
-            const conflictedDir = path.join(this.metadataPath, 'conflicted_files');
-            const conflictedFilePath = path.join(conflictedDir, conflictedFileName);
+        // Always get the latest version for this file
+        const latest = await this.getLatestVersion(metadata.fileName);
 
-            await fs.ensureDir(conflictedDir);
+        // If a file with this name exists, check for conflict
+        if (latest) {
+            // If incoming version is not strictly greater, or if version is same but content is different, treat as conflict
+            if (
+                (metadata.version && metadata.version <= latest.version) ||
+                (metadata.version === latest.version && metadata.checksum !== latest.checksum)
+            ) {
+                // Conflict: do not save as new version, create conflicted file
+                const safeClientId = String(metadata.clientId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+                const safeFileName = String(metadata.fileName || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_');
+                const timestamp = Date.now();
+                const conflictedFileName = `${safeFileName}_conflicted_by_${safeClientId}_${timestamp}`;
+                const conflictedDir = path.join(this.metadataPath, 'conflicted_files');
+                const conflictedFilePath = path.join(conflictedDir, conflictedFileName);
 
-            let contentBuffer = fileContentBuffer;
-            if (!contentBuffer && metadata.fileContent) {
-                // If fileContent is base64, decode it
-                try {
-                    contentBuffer = Buffer.from(metadata.fileContent, 'base64');
-                } catch {}
+                await fs.ensureDir(conflictedDir);
+
+                let contentBuffer = fileContentBuffer;
+                if (!contentBuffer && metadata.fileContent) {
+                    try {
+                        contentBuffer = Buffer.from(metadata.fileContent, 'base64');
+                    } catch {}
+                }
+
+                if (contentBuffer) {
+                    await fs.writeFile(conflictedFilePath, contentBuffer);
+                } else {
+                    await fs.writeJson(conflictedFilePath + '.json', metadata, { spaces: 2 });
+                }
+
+                // Save conflict metadata
+                await this.saveConflict({
+                    id: require('crypto').randomBytes(8).toString('hex'),
+                    fileName: metadata.fileName,
+                    reason: 'Simultaneous or conflicting upload',
+                    conflictType: 'simultaneous_upload',
+                    existing: latest,
+                    incoming: metadata,
+                    timestamp: new Date().toISOString(),
+                    status: 'unresolved'
+                });
+
+                throw new Error(`Conflict detected`);
             }
-
-            if (contentBuffer) {
-                await fs.writeFile(conflictedFilePath, contentBuffer);
-            } else {
-                // If no content, save metadata as JSON for debugging
-                await fs.writeJson(conflictedFilePath + '.json', metadata, { spaces: 2 });
-            }
-
-            throw new Error(`Conflict detected`);
         }
 
         // Add versioning fields
         const now = new Date().toISOString();
+        const newVersion = latest ? latest.version + 1 : 1;
         const newMetadata = {
             ...metadata,
-            version: metadata.version || 1,
+            version: newVersion,
             createdAt: metadata.createdAt || now,
             updatedAt: now,
             size: metadata.size || 0,
             checksum: metadata.checksum || null,
-            clientId: metadata.clientId, // <-- always use provided clientId
+            clientId: metadata.clientId,
             lastModified: metadata.lastModified || now,
             chunks: metadata.chunks || null
         };
