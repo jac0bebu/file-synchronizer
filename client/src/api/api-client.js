@@ -66,7 +66,7 @@ class ApiClient {
     }
 
     async uploadChunkedFile(filePath, clientId) {
-        const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
+        const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB to match server
         const fileName = path.basename(filePath);
         const stats = await fs.stat(filePath);
         const totalSize = stats.size;
@@ -74,42 +74,62 @@ class ApiClient {
         const fileId = crypto.randomBytes(8).toString('hex');
         const lastModified = stats.mtime.toISOString();
 
-        const fileStream = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE });
-        let chunkNumber = 0;
-        let uploadedChunks = 0;
+        console.log(`Starting chunked upload: ${fileName} (${totalSize} bytes, ${totalChunks} chunks)`);
 
-        for await (const chunk of fileStream) {
-            chunkNumber++;
-            const form = new FormData();
-            form.append('chunk', chunk, { filename: `${fileName}.part${chunkNumber}` });
-            form.append('fileId', fileId);
-            form.append('chunkNumber', chunkNumber);
-            form.append('totalChunks', totalChunks);
-            form.append('fileName', fileName);
-            form.append('clientId', clientId); // <-- always use provided clientId
-            form.append('lastModified', lastModified);
+        try {
+            // Read file buffer once
+            const fileBuffer = await fs.readFile(filePath);
+            
+            for (let chunkNumber = 1; chunkNumber <= totalChunks; chunkNumber++) {
+                const start = (chunkNumber - 1) * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, totalSize);
+                const chunk = fileBuffer.slice(start, end);
 
-            try {
-                const response = await axios.post(
-                    `${this.serverUrl}/files/chunk`,
-                    form,
-                    {
-                        headers: form.getHeaders(),
-                        maxContentLength: Infinity,
-                        maxBodyLength: Infinity
+                const form = new FormData();
+                form.append('chunk', chunk, { filename: `${fileName}.part${chunkNumber}` });
+                form.append('fileId', fileId);
+                form.append('chunkNumber', chunkNumber.toString());
+                form.append('totalChunks', totalChunks.toString());
+                form.append('fileName', fileName);
+                form.append('clientId', clientId);
+                form.append('lastModified', lastModified);
+
+                console.log(`Uploading chunk ${chunkNumber}/${totalChunks} (${chunk.length} bytes)...`);
+
+                try {
+                    const response = await axios.post(
+                        `${this.serverUrl}/files/chunk`,
+                        form,
+                        {
+                            headers: form.getHeaders(),
+                            maxContentLength: Infinity,
+                            maxBodyLength: Infinity,
+                            timeout: 30000 // 30 second timeout per chunk
+                        }
+                    );
+                    // Only log chunk completion, not the response message
+                    console.log(`✓ Chunk ${chunkNumber}/${totalChunks} completed`);
+                } catch (error) {
+                    if (error.response && error.response.status === 409) {
+                        // Conflict detected during chunked upload
+                        console.error(`Conflict detected during chunk upload for ${fileName}`);
+                        throw {
+                            conflict: true,
+                            message: 'Conflict detected during chunked upload',
+                            details: error.response.data
+                        };
                     }
-                );
-                uploadedChunks++;
-                // Optionally, show progress here
-            } catch (error) {
-                throw new Error(`Chunk upload failed at chunk ${chunkNumber}: ${error.message}`);
+                    console.error(`Chunk ${chunkNumber} upload failed:`, error.message);
+                    throw new Error(`Chunk upload failed at chunk ${chunkNumber}: ${error.message}`);
+                }
             }
-        }
 
-        if (uploadedChunks === totalChunks) { 
+            // Return success without logging here - let sync manager handle final message
             return { success: true, message: 'All chunks uploaded', fileId, fileName };
-        } else {
-            throw new Error('Not all chunks uploaded');
+
+        } catch (error) {
+            console.error(`Chunked upload failed for ${fileName}:`, error.message);
+            throw error;
         }
     }
 

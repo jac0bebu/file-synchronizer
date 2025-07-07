@@ -97,18 +97,24 @@ app.post('/files', upload.single('file'), async (req, res) => {
 app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
     try {
         const { fileId, chunkNumber, totalChunks, fileName, clientId, lastModified } = req.body;
+        console.log(`Received chunk ${chunkNumber}/${totalChunks} for file ${fileName} from client ${clientId}`);
+        
         if (!fileId || !chunkNumber || !totalChunks || !fileName || !req.file) {
+            console.error('Missing required fields in chunk upload:', { fileId, chunkNumber, totalChunks, fileName, hasFile: !!req.file });
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
         // Save the chunk to disk
         const chunkPath = path.join(chunkDir, `${fileId}_${chunkNumber}`);
         await fs.writeFile(chunkPath, req.file.buffer);
+        console.log(`Saved chunk ${chunkNumber} to ${chunkPath} (${req.file.buffer.length} bytes)`);
 
         // Check if all chunks are uploaded
         const uploadedChunks = await fs.readdir(chunkDir);
         const chunksForFile = uploadedChunks.filter(f => f.startsWith(`${fileId}_`));
+        
         if (chunksForFile.length == Number(totalChunks)) {
+            console.log(`All chunks received for ${fileName}, assembling file...`);
             // Assemble the file
             const fileBuffers = [];
             for (let i = 1; i <= Number(totalChunks); i++) {
@@ -123,6 +129,7 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                 fileBuffers.push(part);
             }
             const completeBuffer = Buffer.concat(fileBuffers);
+            console.log(`Assembled file ${fileName} (${completeBuffer.length} bytes)`);
             
             try {
                 // Get next version
@@ -139,11 +146,12 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                         version: nextVersion,
                         size: saveResult.size,
                         checksum: saveResult.checksum,
-                        clientId: clientId, // <-- always use provided clientId
+                        clientId: clientId,
                         lastModified: lastModified || new Date().toISOString()
                     });
                 } catch (conflictError) {
                     if (conflictError.message.includes('Conflict detected')) {
+                        console.log(`Conflict detected for chunked upload: ${fileName}`);
                         return res.status(409).json({
                             success: false,
                             error: 'Conflict detected',
@@ -151,7 +159,6 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                             action: 'resolve_conflict'
                         });
                     } else {
-                        // Log and return a 500 for other errors
                         console.error('Metadata save error:', conflictError);
                         return res.status(500).json({ error: conflictError.message });
                     }
@@ -162,9 +169,10 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                     await fs.remove(path.join(chunkDir, `${fileId}_${i}`));
                 }
 
+                console.log(`✅ File ${fileName} assembled successfully as version ${nextVersion}`);
                 res.json({ 
                     success: true, 
-                    message: `File assembled and saved as version ${nextVersion}.`,
+                    message: `File assembled successfully`,
                     version: nextVersion
                 });
                 
@@ -181,7 +189,7 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                 }
             }
         } else {
-            res.json({ success: true, message: `Chunk ${chunkNumber} uploaded.` });
+            res.json({ success: true, message: `Chunk ${chunkNumber} received` });
         }
     } catch (error) {
         console.error('Chunk upload error:', error);
