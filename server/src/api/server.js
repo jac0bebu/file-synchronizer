@@ -139,7 +139,7 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                         version: nextVersion,
                         size: saveResult.size,
                         checksum: saveResult.checksum,
-                        clientId: clientId || 'unknown',
+                        clientId: clientId, // <-- always use provided clientId
                         lastModified: lastModified || new Date().toISOString()
                     });
                 } catch (conflictError) {
@@ -342,7 +342,7 @@ app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
         const metadata = {
             fileId: require('crypto').randomBytes(8).toString('hex'),
             fileName,
-            clientId,
+            clientId, // <-- always use provided clientId
             lastModified: lastModified || new Date().toISOString(),
             size: fileBuffer.length,
             checksum

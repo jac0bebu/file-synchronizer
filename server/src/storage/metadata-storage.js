@@ -46,7 +46,7 @@ class MetadataStorage {
             updatedAt: now,
             size: metadata.size || 0,
             checksum: metadata.checksum || null,
-            clientId: metadata.clientId || 'unknown',
+            clientId: metadata.clientId, // <-- always use provided clientId
             lastModified: metadata.lastModified || now,
             chunks: metadata.chunks || null
         };

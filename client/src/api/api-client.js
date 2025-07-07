@@ -42,7 +42,7 @@ class ApiClient {
             const form = new FormData();
             form.append('file', fs.createReadStream(filePath));
             form.append('fileName', fileName);
-            form.append('clientId', clientId || 'default-client');
+            form.append('clientId', clientId); // <-- always use provided clientId
             form.append('lastModified', lastModified);
             
             const response = await axios.post(`${this.serverUrl}/files/upload-safe`, form, {
@@ -66,7 +66,7 @@ class ApiClient {
     }
 
     async uploadChunkedFile(filePath, clientId) {
-        const CHUNK_SIZE = 4 * 1024 * 1024; // 10MB
+        const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
         const fileName = path.basename(filePath);
         const stats = await fs.stat(filePath);
         const totalSize = stats.size;
@@ -86,7 +86,7 @@ class ApiClient {
             form.append('chunkNumber', chunkNumber);
             form.append('totalChunks', totalChunks);
             form.append('fileName', fileName);
-            form.append('clientId', clientId || 'default-client');
+            form.append('clientId', clientId); // <-- always use provided clientId
             form.append('lastModified', lastModified);
 
             try {

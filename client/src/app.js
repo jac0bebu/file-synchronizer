@@ -11,7 +11,7 @@ class SyncApplication {
         // Initialize configuration
         this.serverUrl = options.serverUrl;
         this.syncFolder = options.syncFolder || path.join(__dirname, '../sync-folder');
-        this.clientId = options.clientId || `client-${crypto.randomBytes(4).toString('hex')}`;
+        this.clientId = options.clientId; // <-- always provided, no fallback to random
         this.pollInterval = options.pollInterval || 10000;
         this.username = options.username || 'unknown';
         this.downloadFolder = options.downloadFolder || path.join(__dirname, '../downloads', this.username);
