@@ -154,20 +154,32 @@ class SyncManager {
             const fileSize = stats.size;
             const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
 
-            console.log(`Uploading ${fileName} (${fileSize} bytes)`.cyan);
+            // --- NEW: Get latest version from server before upload ---
+            let nextVersion = 1;
+            try {
+                const versions = await this.api.getFileVersions(fileName);
+                if (Array.isArray(versions) && versions.length > 0) {
+                    const maxVersion = Math.max(...versions.map(v => v.version || 1));
+                    nextVersion = maxVersion + 1;
+                }
+            } catch (e) {
+                // If error (file not found), keep nextVersion = 1
+            }
+
+            console.log(`Uploading ${fileName} (${fileSize} bytes) as version ${nextVersion}`.cyan);
 
             let result;
             if (fileSize > CHUNK_SIZE) {
                 // Alert user in CLI about chunked upload
                 console.log(`⚠️  File "${fileName}" is larger than 4MB. Using chunked upload...`.yellow.bold);
-                result = await this.api.uploadChunkedFile(filePath, this.clientId);
+                result = await this.api.uploadChunkedFile(filePath, this.clientId, nextVersion);
                 console.log(`Successfully uploaded all chunks for ${fileName}`.green);
                 this.updateSyncStatus(fileName, 'synced', {
                     lastSync: new Date().toISOString()
                 });
             } else {
                 // Use normal upload for small files
-                result = await this.api.uploadFile(filePath, this.clientId);
+                result = await this.api.uploadFile(filePath, this.clientId, nextVersion);
                 console.log(`Successfully uploaded ${fileName} (version ${result.version})`.green);
                 this.updateSyncStatus(fileName, 'synced', {
                     version: result.version,
