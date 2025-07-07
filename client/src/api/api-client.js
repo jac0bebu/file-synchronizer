@@ -71,8 +71,13 @@ class ApiClient {
         const stats = await fs.stat(filePath);
         const totalSize = stats.size;
         const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
-        const fileId = crypto.randomBytes(8).toString('hex');
         const lastModified = stats.mtime.toISOString();
+
+        // --- Use deterministic fileId based on fileName, size, mtime ---
+        const fileId = crypto.createHash('md5')
+            .update(fileName + totalSize + lastModified)
+            .digest('hex');
+        // --------------------------------------------------------------
 
         console.log(`Starting chunked upload: ${fileName} (${totalSize} bytes, ${totalChunks} chunks)`);
 
@@ -107,7 +112,20 @@ class ApiClient {
                             timeout: 30000 // 30 second timeout per chunk
                         }
                     );
-                    // Only log chunk completion, not the response message
+                    
+                    // Check if it's a duplicate
+                    if (response.data.duplicate) {
+                        console.log(`File ${fileName} already exists with same content, skipping remaining chunks`);
+                        return { 
+                            success: true, 
+                            message: 'File already up-to-date', 
+                            fileId, 
+                            fileName,
+                            version: response.data.version,
+                            duplicate: true
+                        };
+                    }
+                    
                     console.log(`✓ Chunk ${chunkNumber}/${totalChunks} completed`);
                 } catch (error) {
                     if (error.response && error.response.status === 409) {

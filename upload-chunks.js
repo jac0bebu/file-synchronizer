@@ -9,7 +9,12 @@ const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB, matches server limit
 async function uploadFileInChunks(filePath, serverUrl) {
     try {
         const fileName = path.basename(filePath);
-        const fileId = crypto.randomBytes(8).toString('hex');
+        const stats = await fs.stat(filePath);
+        const lastModified = stats.mtime.toISOString();
+        // Use deterministic fileId
+        const fileId = crypto.createHash('md5')
+            .update(fileName + stats.size + lastModified)
+            .digest('hex');
         const fileBuffer = await fs.readFile(filePath);
         const totalChunks = Math.ceil(fileBuffer.length / CHUNK_SIZE);
 
@@ -30,6 +35,7 @@ async function uploadFileInChunks(filePath, serverUrl) {
             form.append('totalChunks', totalChunks.toString());
             form.append('fileName', fileName);
             form.append('chunk', chunk, { filename: `${fileName}.part${chunkNumber}` });
+            form.append('lastModified', lastModified);
 
             console.log(`Uploading chunk ${chunkNumber}/${totalChunks} (${chunk.length} bytes)...`);
             
@@ -38,6 +44,12 @@ async function uploadFileInChunks(filePath, serverUrl) {
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity
             });
+
+            // If duplicate, stop uploading further chunks
+            if (response.data.duplicate) {
+                console.log(`File already exists with same content, skipping remaining chunks`);
+                break;
+            }
 
             console.log(`✓ Chunk ${chunkNumber} response:`, response.data.message);
         }

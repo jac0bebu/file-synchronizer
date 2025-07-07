@@ -15,7 +15,8 @@ class SyncManager {
         this.pendingDownloads = new Map();
         this.fileSyncStatus = new Map();
         this.recentlyDeleted = new Set();
-        this.pendingDeletions = new Set(); // Track files marked for server deletion
+        this.pendingDeletions = new Set();
+        this.recentlyUploaded = new Map(); // Track recently uploaded files
 
         this.pendingConflicts = new Map(); // Track unresolved conflicts
         this.conflictHistory = new Map(); // Track resolved conflicts
@@ -147,6 +148,16 @@ class SyncManager {
                 return;
             }
 
+            // Check if file was recently uploaded by this client
+            const recentUpload = this.recentlyUploaded.get(fileName);
+            if (recentUpload) {
+                const timeSinceUpload = Date.now() - recentUpload.timestamp;
+                if (timeSinceUpload < 30000) { // 30 seconds
+                    console.log(`File ${fileName} was recently uploaded, skipping`.gray);
+                    return;
+                }
+            }
+
             this.pendingUploads.set(fileName, filePath);
             this.updateSyncStatus(fileName, 'uploading');
 
@@ -154,38 +165,49 @@ class SyncManager {
             const fileSize = stats.size;
             const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
 
-            // --- NEW: Get latest version from server before upload ---
-            let nextVersion = 1;
-            try {
-                const versions = await this.api.getFileVersions(fileName);
-                if (Array.isArray(versions) && versions.length > 0) {
-                    const maxVersion = Math.max(...versions.map(v => v.version || 1));
-                    nextVersion = maxVersion + 1;
-                }
-            } catch (e) {
-                // If error (file not found), keep nextVersion = 1
-            }
-
-            console.log(`Uploading ${fileName} (${fileSize} bytes) as version ${nextVersion}`.cyan);
+            console.log(`Uploading ${fileName} (${fileSize} bytes)`.cyan);
 
             let result;
             if (fileSize > CHUNK_SIZE) {
                 // Alert user in CLI about chunked upload
-                console.log(`⚠️  File "${fileName}" is larger than 4MB. Using chunked upload...`.yellow.bold);
-                result = await this.api.uploadChunkedFile(filePath, this.clientId, nextVersion);
+                console.log(`⚠️  File "${fileName}" is larger than 10MB. Using chunked upload...`.yellow.bold);
+                result = await this.api.uploadChunkedFile(filePath, this.clientId);
+                
+                // Mark as recently uploaded to prevent re-upload
+                this.recentlyUploaded.set(fileName, {
+                    timestamp: Date.now(),
+                    fileId: result.fileId,
+                    type: 'chunked'
+                });
+                
                 console.log(`Successfully uploaded all chunks for ${fileName}`.green);
                 this.updateSyncStatus(fileName, 'synced', {
-                    lastSync: new Date().toISOString()
+                    lastSync: new Date().toISOString(),
+                    uploadType: 'chunked'
                 });
             } else {
                 // Use normal upload for small files
-                result = await this.api.uploadFile(filePath, this.clientId, nextVersion);
+                result = await this.api.uploadFile(filePath, this.clientId);
+                
+                // Mark as recently uploaded
+                this.recentlyUploaded.set(fileName, {
+                    timestamp: Date.now(),
+                    version: result.version,
+                    type: 'normal'
+                });
+                
                 console.log(`Successfully uploaded ${fileName} (version ${result.version})`.green);
                 this.updateSyncStatus(fileName, 'synced', {
                     version: result.version,
-                    lastSync: new Date().toISOString()
+                    lastSync: new Date().toISOString(),
+                    uploadType: 'normal'
                 });
             }
+
+            // Clean up old recent uploads
+            setTimeout(() => {
+                this.recentlyUploaded.delete(fileName);
+            }, 60000); // Remove after 60 seconds
 
         } catch (error) {
             if (error.conflict) {
@@ -550,6 +572,13 @@ class SyncManager {
                 continue;
             }
 
+            // Skip if recently uploaded by this client
+            const recentUpload = this.recentlyUploaded.get(fileName);
+            if (recentUpload && Date.now() - recentUpload.timestamp < 30000) {
+                if (verbose) console.log(`Skipping recently uploaded file: ${fileName}`.gray);
+                continue;
+            }
+
             const localFile = localFileMap.get(fileName);
 
             if (!localFile) {
@@ -604,7 +633,7 @@ class SyncManager {
                     }
                 }
 
-                if (shouldUpload) {
+                if (shouldUpload && !this.recentlyUploaded.has(fileName)) {
                     if (verbose) console.log(`Local file modified after server: uploading ${fileName}`.green);
                     try {
                         await this.uploadFile(localFile.path);
@@ -730,7 +759,7 @@ class SyncManager {
     }
 
     startPeriodicSync() {
-        if (this.syncIntervalId) {
+        if this.syncIntervalId) {
             clearInterval(this.syncIntervalId);
         }
         this.syncIntervalId = setInterval(async () => {

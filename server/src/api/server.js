@@ -115,6 +115,7 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
         
         if (chunksForFile.length == Number(totalChunks)) {
             console.log(`All chunks received for ${fileName}, assembling file...`);
+            
             // Assemble the file
             const fileBuffers = [];
             for (let i = 1; i <= Number(totalChunks); i++) {
@@ -130,6 +131,43 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
             }
             const completeBuffer = Buffer.concat(fileBuffers);
             console.log(`Assembled file ${fileName} (${completeBuffer.length} bytes)`);
+            
+            // Check if this exact content already exists (by checksum)
+            const checksum = require('crypto').createHash('md5').update(completeBuffer).digest('hex');
+            const allVersions = await metadataStorage.getAllVersions(fileName);
+            if (allVersions && allVersions.length > 0) {
+                const latestMeta = allVersions.reduce((a, b) => (a.version > b.version ? a : b));
+                if (latestMeta && latestMeta.checksum === checksum) {
+                    console.log(`File ${fileName} already up-to-date with same content, skipping`);
+                    // Clean up chunks
+                    for (let i = 1; i <= Number(totalChunks); i++) {
+                        await fs.remove(path.join(chunkDir, `${fileId}_${i}`));
+                    }
+                    return res.json({
+                        success: true,
+                        message: 'File already up-to-date, no new version created',
+                        version: latestMeta.version,
+                        duplicate: true
+                    });
+                }
+            }
+
+            // Also check if a file with this fileId was already processed recently (avoid duplicate versioning)
+            if (allVersions && allVersions.length > 0) {
+                const sameId = allVersions.find(v => v.fileId === fileId);
+                if (sameId && sameId.checksum === checksum) {
+                    // Already processed this fileId
+                    for (let i = 1; i <= Number(totalChunks); i++) {
+                        await fs.remove(path.join(chunkDir, `${fileId}_${i}`));
+                    }
+                    return res.json({
+                        success: true,
+                        message: 'File already processed with this fileId',
+                        version: sameId.version,
+                        duplicate: true
+                    });
+                }
+            }
             
             try {
                 // Get next version
@@ -147,7 +185,8 @@ app.post('/files/chunk', upload.single('chunk'), async (req, res) => {
                         size: saveResult.size,
                         checksum: saveResult.checksum,
                         clientId: clientId,
-                        lastModified: lastModified || new Date().toISOString()
+                        lastModified: lastModified || new Date().toISOString(),
+                        uploadType: 'chunked'
                     });
                 } catch (conflictError) {
                     if (conflictError.message.includes('Conflict detected')) {
@@ -332,8 +371,7 @@ app.post('/conflicts/:conflictId/resolve', async (req, res) => {
 });
 
 // Add a simple in-memory map to track recent uploads within the sync interval
-const recentUploads = new Map();
-const SYNC_INTERVAL_MS = 10000; // 10 seconds
+
 
 // Upload with conflict detection (overwrite this endpoint)
 app.post('/files/upload-safe', upload.single('file'), async (req, res) => {
