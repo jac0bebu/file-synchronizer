@@ -227,175 +227,19 @@ class SyncManager {
 
     // Enhanced handleConflict method
     async handleConflict(fileName, localPath, conflictDetails) {
-        console.log(`\n⚠️  CONFLICT DETECTED: ${fileName}`.yellow.bold);
-        console.log('=' .repeat(60).yellow);
-
-        try {
-            // Mark as conflict in status
-            this.updateSyncStatus(fileName, 'conflict', {
-                detectedAt: new Date().toISOString(),
-                details: conflictDetails
-            });
-
-            // Get local file information
-            const localStats = await fs.stat(localPath);
-            const localContent = await fs.readFile(localPath, 'utf-8');
-            const localInfo = {
-                size: localStats.size,
-                lastModified: localStats.mtime.toISOString(),
-                content: localContent,
-                location: 'LOCAL'
-            };
-
-            // Get server file information
-            let serverInfo = null;
-            try {
-                const serverFiles = await this.api.listFiles();
-                const serverFile = serverFiles.find(f => (f.name || f.fileName) === fileName);
-
-                if (serverFile) {
-                    // Download server version to temporary location
-                    const tempServerPath = path.join(this.syncFolder, `.conflict_server_${fileName}`);
-                    await this.api.downloadFile(fileName, tempServerPath);
-                    const serverContent = await fs.readFile(tempServerPath, 'utf-8');
-
-                    serverInfo = {
-                        size: serverFile.size,
-                        lastModified: serverFile.lastModified,
-                        version: serverFile.version || serverFile.currentVersion,
-                        content: serverContent,
-                        location: 'SERVER',
-                        tempPath: tempServerPath
-                    };
-                }
-            } catch (error) {
-                console.error('Failed to get server version:'.red, error.message);
-            }
-
-            // Display both versions
-            this.displayConflictVersions(fileName, localInfo, serverInfo);
-
-            // Store conflict for resolution
-            this.pendingConflicts.set(fileName, {
-                localInfo,
-                serverInfo,
-                localPath,
-                detectedAt: new Date(),
-                resolved: false
-            });
-
-
-            // Clean up temporary files
-            if (serverInfo && serverInfo.tempPath) {
-                try {
-                    await fs.remove(serverInfo.tempPath);
-                } catch (error) {
-                    console.error('Failed to clean up temp file:'.red, error.message);
-                }
-            }
-
-        } catch (error) {
-            console.error(`Error handling conflict for ${fileName}:`.red, error.message);
-            this.updateSyncStatus(fileName, 'conflict-error', error.message);
-            throw error;
-        }
+        // Only print a simple message for conflict
+        console.log(`Conflict detected for file "${fileName}".`.yellow);
+        this.updateSyncStatus(fileName, 'conflict', {
+            detectedAt: new Date().toISOString(),
+            details: conflictDetails
+        });
+        // No preview or content shown
     }
 
     displayConflictVersions(fileName, localInfo, serverInfo) {
-        console.log(`\n📄 File: ${fileName}`.cyan.bold);
-        console.log('-'.repeat(60));
-
-        // Local version
-        // --- FIX: If lastConflictLocalInfo matches, use it for preview ---
-        let displayLocal = localInfo;
-        if (
-            this.lastConflictLocalInfo &&
-            this.lastConflictLocalInfo.fileName === fileName &&
-            this.lastConflictLocalInfo.content
-        ) {
-            displayLocal = this.lastConflictLocalInfo;
-        }
-        console.log('🏠 LOCAL VERSION:'.green.bold);
-        console.log(`   📏 Size: ${displayLocal.size} bytes`);
-        console.log(`   📅 Modified: ${displayLocal.lastModified ? new Date(displayLocal.lastModified).toLocaleString() : 'unknown'}`);
-        console.log(`   📝 Content Preview:`);
-        console.log('   ' + '-'.repeat(40));
-        const localPreview = displayLocal.content && displayLocal.content.length > 200
-            ? displayLocal.content.substring(0, 200) + '...'
-            : (displayLocal.content || '');
-        console.log(`   ${localPreview.split('\n').join('\n   ')}`);
-        console.log('   ' + '-'.repeat(40));
-
-        console.log('');
-
-        // Server version
-        if (serverInfo) {
-            console.log('🌐 SERVER VERSION:'.blue.bold);
-            console.log(`   📏 Size: ${serverInfo.size} bytes`);
-            console.log(`   📅 Modified: ${new Date(serverInfo.lastModified).toLocaleString()}`);
-            console.log(`   🔢 Version: ${serverInfo.version || 'unknown'}`);
-            console.log(`   📝 Content Preview:`);
-            console.log('   ' + '-'.repeat(40));
-            const serverPreview = serverInfo.content.length > 200
-                ? serverInfo.content.substring(0, 200) + '...'
-                : serverInfo.content;
-            console.log(`   ${serverPreview.split('\n').join('\n   ')}`);
-            console.log('   ' + '-'.repeat(40));
-        } else {
-            console.log('🌐 SERVER VERSION: Not available'.red);
-        }
-
-        console.log('\n' + '='.repeat(60));
+        // Only print a simple message for conflict
+        console.log(`Conflict detected for file "${fileName}".`.yellow);
     }
-
-    // Display both versions with detailed information
-    displayConflictVersions(fileName, localInfo, serverInfo) {
-        console.log(`\n📄 File: ${fileName}`.cyan.bold);
-        console.log('-'.repeat(60));
-
-        // Local version
-        // --- FIX: If lastConflictLocalInfo matches, use it for preview ---
-        let displayLocal = localInfo;
-        if (
-            this.lastConflictLocalInfo &&
-            this.lastConflictLocalInfo.fileName === fileName &&
-            this.lastConflictLocalInfo.content
-        ) {
-            displayLocal = this.lastConflictLocalInfo;
-        }
-        console.log('🏠 LOCAL VERSION:'.green.bold);
-        console.log(`   📏 Size: ${displayLocal.size} bytes`);
-        console.log(`   📅 Modified: ${displayLocal.lastModified ? new Date(displayLocal.lastModified).toLocaleString() : 'unknown'}`);
-        console.log(`   📝 Content Preview:`);
-        console.log('   ' + '-'.repeat(40));
-        const localPreview = displayLocal.content && displayLocal.content.length > 200
-            ? displayLocal.content.substring(0, 200) + '...'
-            : (displayLocal.content || '');
-        console.log(`   ${localPreview.split('\n').join('\n   ')}`);
-        console.log('   ' + '-'.repeat(40));
-
-        console.log('');
-
-        // Server version
-        if (serverInfo) {
-            console.log('🌐 SERVER VERSION:'.blue.bold);
-            console.log(`   📏 Size: ${serverInfo.size} bytes`);
-            console.log(`   📅 Modified: ${new Date(serverInfo.lastModified).toLocaleString()}`);
-            console.log(`   🔢 Version: ${serverInfo.version || 'unknown'}`);
-            console.log(`   📝 Content Preview:`);
-            console.log('   ' + '-'.repeat(40));
-            const serverPreview = serverInfo.content.length > 200
-                ? serverInfo.content.substring(0, 200) + '...'
-                : serverInfo.content;
-            console.log(`   ${serverPreview.split('\n').join('\n   ')}`);
-            console.log('   ' + '-'.repeat(40));
-        } else {
-            console.log('🌐 SERVER VERSION: Not available'.red);
-        }
-
-        console.log('\n' + '='.repeat(60));
-    }
-
 
     // Show full content comparison
     showFullComparison(localInfo, serverInfo) {

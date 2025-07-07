@@ -130,49 +130,8 @@ class CliInterface {
                 return;
             }
 
-            // Always allow the client to resolve their own conflict (no need to check winner/loser logic)
-            let localMeta, localContent, serverMeta, serverContent;
-            const myLoser = (conflict.losers || [])[0];
-            const winner = conflict.winner;
-
-            // This client is always the loser in their own conflict
-            localMeta = myLoser;
-            const conflictFileName = myLoser.conflictFileName || myLoser.fileName;
-            let conflictPath = require('path').join(this.syncManager.syncFolder, conflictFileName);
-            try {
-                localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
-            } catch {
-                try {
-                    conflictPath = require('path').join(this.downloadFolder, conflictFileName);
-                    localContent = await require('fs-extra').readFile(conflictPath, 'utf-8');
-                } catch {
-                    localContent = '[content not available]';
-                }
-            }
-            serverMeta = winner;
-            serverContent = '[content not available]';
-            if (winner && winner.fileName && winner.version && this.syncManager.api.downloadFileVersion) {
-                const os = require('os');
-                const tempPath = require('path').join(os.tmpdir(), `conflict-server-${winner.fileName}.v${winner.version}`);
-                try {
-                    await this.syncManager.api.downloadFileVersion(winner.fileName, winner.version, tempPath);
-                    serverContent = await require('fs-extra').readFile(tempPath, 'utf-8');
-                    await require('fs-extra').remove(tempPath);
-                } catch {}
-            }
-
-            const displayObj = {
-                fileName: conflict.fileName,
-                incoming: {
-                    ...localMeta,
-                    content: localContent
-                },
-                existing: {
-                    ...serverMeta,
-                    content: serverContent
-                }
-            };
-            await this.displayConflictDetails(displayObj);
+            // Only print a simple message for conflict
+            console.log(`Conflict detected for file "${conflict.fileName}".`.yellow);
 
         } catch (error) {
             console.error('Error resolving conflict:'.red, error.message);
@@ -181,57 +140,8 @@ class CliInterface {
     }
 
     async displayConflictDetails(conflict) {
-        // Show local and server versions with size, timestamp, and content preview
-        console.log(`\n📄 File: ${conflict.fileName}`.cyan.bold);
-        console.log('-'.repeat(60));
-        // Local (incoming) version
-        const local = conflict.incoming;
-        console.log('🏠 LOCAL VERSION:'.green.bold);
-        console.log(`   📏 Size: ${local.size} bytes`);
-        console.log(`   📅 Modified: ${new Date(local.lastModified).toLocaleString()}`);
-        console.log('   📝 Content Preview:');
-        console.log('   ' + '-'.repeat(40));
-        let localContent = local.content;
-        if (!localContent) {
-            // Try to read from sync folder
-            const localPath = path.join(this.syncManager.syncFolder, conflict.fileName);
-            try {
-                localContent = await fs.readFile(localPath, 'utf-8');
-            } catch {}
-        }
-        if (!localContent) localContent = '[content not available]';
-        const localPreview = localContent.length > 200 ? localContent.substring(0, 200) + '...' : localContent;
-        console.log(`   ${localPreview.split('\n').join('\n   ')}`);
-        console.log('   ' + '-'.repeat(40));
-        console.log('');
-        // Server (existing) version
-        const server = conflict.existing;
-        if (server) {
-            console.log('🌐 SERVER VERSION:'.blue.bold);
-            console.log(`   📏 Size: ${server.size} bytes`);
-            console.log(`   📅 Modified: ${new Date(server.lastModified).toLocaleString()}`);
-            console.log(`   🔢 Version: ${server.version || 'unknown'}`);
-            console.log('   📝 Content Preview:');
-            console.log('   ' + '-'.repeat(40));
-            let serverContent = server.content;
-            if (!serverContent && this.syncManager.api.downloadFileVersion) {
-                // Try to download the server version to a temp file and read it
-                const os = require('os');
-                const tempPath = path.join(os.tmpdir(), `conflict-server-${conflict.fileName}.v${server.version}`);
-                try {
-                    await this.syncManager.api.downloadFileVersion(conflict.fileName, server.version, tempPath);
-                    serverContent = await fs.readFile(tempPath, 'utf-8');
-                    await fs.remove(tempPath);
-                } catch {}
-            }
-            if (!serverContent) serverContent = '[content not available]';
-            const serverPreview = serverContent.length > 200 ? serverContent.substring(0, 200) + '...' : serverContent;
-            console.log(`   ${serverPreview.split('\n').join('\n   ')}`);
-            console.log('   ' + '-'.repeat(40));
-        } else {
-            console.log('🌐 SERVER VERSION: Not available'.red);
-        }
-        console.log('\n' + '='.repeat(60));
+        // Only print a simple message for conflict
+        console.log(`Conflict detected for file "${conflict.fileName}".`.yellow);
     }
 
     handleCommand(input) {
@@ -687,3 +597,4 @@ class CliInterface {
 }
 
 module.exports = CliInterface;
+               

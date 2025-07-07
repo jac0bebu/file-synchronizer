@@ -28,13 +28,40 @@ class MetadataStorage {
         return all;
     }
 
-    async saveMetadata(metadata) {
+    async saveMetadata(metadata, fileContentBuffer = null) {
         await this.initPromise;
         // Check for conflicts
         const conflict = await this.detectConflict(metadata);
         if (conflict) {
             await this.saveConflict(conflict); // Ensure conflict is saved
-            throw new Error(`Conflict detected: ${conflict.reason}`);
+
+            // --- Always create a conflicted file for the loser client ---
+            // This works for both same and different computers
+            const safeClientId = String(metadata.clientId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const safeFileName = String(metadata.fileName || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_');
+            const timestamp = Date.now();
+            const conflictedFileName = `${safeFileName}_conflicted_by_${safeClientId}_${timestamp}`;
+            const conflictedDir = path.join(this.metadataPath, 'conflicted_files');
+            const conflictedFilePath = path.join(conflictedDir, conflictedFileName);
+
+            await fs.ensureDir(conflictedDir);
+
+            let contentBuffer = fileContentBuffer;
+            if (!contentBuffer && metadata.fileContent) {
+                // If fileContent is base64, decode it
+                try {
+                    contentBuffer = Buffer.from(metadata.fileContent, 'base64');
+                } catch {}
+            }
+
+            if (contentBuffer) {
+                await fs.writeFile(conflictedFilePath, contentBuffer);
+            } else {
+                // If no content, save metadata as JSON for debugging
+                await fs.writeJson(conflictedFilePath + '.json', metadata, { spaces: 2 });
+            }
+
+            throw new Error(`Conflict detected`);
         }
 
         // Add versioning fields
