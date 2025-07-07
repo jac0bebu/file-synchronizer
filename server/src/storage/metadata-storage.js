@@ -41,52 +41,42 @@ class MetadataStorage {
                 (metadata.version && metadata.version <= latest.version) ||
                 (metadata.version === latest.version && metadata.checksum !== latest.checksum)
             ) {
-                // --- NEW: Use lastModified to determine which upload is earlier ---
-                const incomingTime = new Date(metadata.lastModified || 0).getTime();
-                const latestTime = new Date(latest.lastModified || 0).getTime();
+                // Conflict: do not save as new version, create conflicted file
+                const safeClientId = String(metadata.clientId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+                const safeFileName = String(metadata.fileName || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_');
+                const timestamp = Date.now();
+                const conflictedFileName = `${safeFileName}_conflicted_by_${safeClientId}_${timestamp}`;
+                const conflictedDir = path.join(this.metadataPath, 'conflicted_files');
+                const conflictedFilePath = path.join(conflictedDir, conflictedFileName);
 
-                // If incoming is later or equal, treat as conflict (rename the later one)
-                if (incomingTime >= latestTime) {
-                    // Conflict: do not save as new version, create conflicted file
-                    const safeClientId = String(metadata.clientId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
-                    const safeFileName = String(metadata.fileName || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_');
-                    const timestamp = Date.now();
-                    const conflictedFileName = `${safeFileName}_conflicted_by_${safeClientId}_${timestamp}`;
-                    const conflictedDir = path.join(this.metadataPath, 'conflicted_files');
-                    const conflictedFilePath = path.join(conflictedDir, conflictedFileName);
+                await fs.ensureDir(conflictedDir);
 
-                    await fs.ensureDir(conflictedDir);
-
-                    let contentBuffer = fileContentBuffer;
-                    if (!contentBuffer && metadata.fileContent) {
-                        try {
-                            contentBuffer = Buffer.from(metadata.fileContent, 'base64');
-                        } catch {}
-                    }
-
-                    if (contentBuffer) {
-                        await fs.writeFile(conflictedFilePath, contentBuffer);
-                    } else {
-                        await fs.writeJson(conflictedFilePath + '.json', metadata, { spaces: 2 });
-                    }
-
-                    // Save conflict metadata
-                    await this.saveConflict({
-                        id: require('crypto').randomBytes(8).toString('hex'),
-                        fileName: metadata.fileName,
-                        reason: 'Simultaneous or conflicting upload',
-                        conflictType: 'simultaneous_upload',
-                        existing: latest,
-                        incoming: metadata,
-                        timestamp: new Date().toISOString(),
-                        status: 'unresolved'
-                    });
-
-                    throw new Error(`Conflict detected`);
+                let contentBuffer = fileContentBuffer;
+                if (!contentBuffer && metadata.fileContent) {
+                    try {
+                        contentBuffer = Buffer.from(metadata.fileContent, 'base64');
+                    } catch {}
                 }
-                // If incoming is earlier, ignore (do not overwrite the latest)
-                // Just return the latest version as the result
-                return latest;
+
+                if (contentBuffer) {
+                    await fs.writeFile(conflictedFilePath, contentBuffer);
+                } else {
+                    await fs.writeJson(conflictedFilePath + '.json', metadata, { spaces: 2 });
+                }
+
+                // Save conflict metadata
+                await this.saveConflict({
+                    id: require('crypto').randomBytes(8).toString('hex'),
+                    fileName: metadata.fileName,
+                    reason: 'Simultaneous or conflicting upload',
+                    conflictType: 'simultaneous_upload',
+                    existing: latest,
+                    incoming: metadata,
+                    timestamp: new Date().toISOString(),
+                    status: 'unresolved'
+                });
+
+                throw new Error(`Conflict detected`);
             }
         }
 
